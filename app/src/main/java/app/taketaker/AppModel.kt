@@ -72,7 +72,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     var selected by mutableStateOf(emptyList<String>()); private set
     /** Per USB source: capture raw (true) or through Android (false). Absent = raw when possible. */
     var rawPref by mutableStateOf(emptyMap<String, Boolean>()); private set
-    private var specs = emptyMap<String, RawSpec>()
+    private var specs = emptyMap<String, List<RawSpec>>()
+    /** Per raw source: chosen bit depth (absent = deepest the device offers). */
+    var rawBits by mutableStateOf(emptyMap<String, Int>()); private set
     var session by mutableStateOf("take")
     var rate by mutableStateOf(48000); private set
     var rows by mutableStateOf(emptyList<Row>()); private set
@@ -96,8 +98,22 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     fun effective(s: Source): Source {
         val wantRaw = s.canRaw && (rawPref[s.key] ?: true) || !s.canSystem
         if (!wantRaw) return s
-        val spec = specs[s.key]
+        val spec = rawFormats(s.key).let { fs -> fs.firstOrNull { it.bits == rawBits[s.key] } ?: fs.firstOrNull() }
         return if (spec != null) s.asRaw(spec) else s.copy(raw = true)
+    }
+
+    /** Formats of a raw source at its full channel count, deepest first. */
+    fun rawFormats(key: String): List<RawSpec> {
+        val all = specs[key].orEmpty()
+        val ch = all.maxOfOrNull { it.channels } ?: return emptyList()
+        return all.filter { it.channels == ch }.distinctBy { it.bits }
+    }
+
+    /** Lower bit depths mean less USB work for the device; useful when it is near its CPU limit. */
+    fun pickBits(s: Source, bits: Int) {
+        if (effective(s).usb?.bits == bits) return
+        rawBits = rawBits + (s.key to bits)
+        startEngine()
     }
 
     val selectedSources get() = selected.mapNotNull { k -> sources.firstOrNull { it.key == k } }.map(::effective)
@@ -199,7 +215,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 return false
             }
             val spec = UsbRaw.probe(um, dev)
-            if (spec == null) {
+            if (spec.isEmpty()) {
                 rawPref = rawPref + (k to false)
                 message = "${s.name}: raw mode needs a usb audio class 1 device"
             } else {

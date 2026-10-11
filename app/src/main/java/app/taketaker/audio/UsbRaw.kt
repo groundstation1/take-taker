@@ -43,15 +43,19 @@ object UsbRaw {
         f.interfaceClass == UsbConstants.USB_CLASS_AUDIO && f.interfaceSubclass == 2 &&
             (0 until f.endpointCount).any { e ->
                 val ep = f.getEndpoint(e)
-                ep.direction == UsbConstants.USB_DIR_IN && ep.type == UsbConstants.USB_ENDPOINT_XFER_ISOC
+                ep.direction == UsbConstants.USB_DIR_IN && ep.type == UsbConstants.USB_ENDPOINT_XFER_ISOC &&
+                    (ep.attributes shr 4) and 3 != 1 // not a feedback endpoint
             }
     }
 
-    /** Needs USB permission (reads class-specific descriptors). */
-    fun probe(um: UsbManager, d: UsbDevice): RawSpec? {
-        val c = um.openDevice(d) ?: return null
-        return try { parse(c.rawDescriptors)?.copy(device = d) } finally { c.close() }
+    /** Every usable capture format, best first. Needs USB permission (reads class-specific descriptors). */
+    fun probe(um: UsbManager, d: UsbDevice): List<RawSpec> {
+        val c = um.openDevice(d) ?: return emptyList()
+        return try { parseAll(c.rawDescriptors).map { it.copy(device = d) } } finally { c.close() }
     }
+
+    /** The widest / deepest format. */
+    fun parse(b: ByteArray): RawSpec? = parseAll(b).firstOrNull()
 
     private class Alt(val iface: Int, val alt: Int) {
         var channels = 0; var subframe = 0; var bits = 0
@@ -60,7 +64,7 @@ object UsbRaw {
     }
 
     /** UAC1 only; UAC2 devices return null and stay on the system path. */
-    fun parse(b: ByteArray): RawSpec? {
+    fun parseAll(b: ByteArray): List<RawSpec> {
         val alts = mutableListOf<Alt>()
         var cur: Alt? = null
         var ifClass = 0; var ifSub = 0
@@ -93,7 +97,8 @@ object UsbRaw {
                 5 -> { // endpoint
                     val a = cur
                     val addr = u8(i + 2); val attr = u8(i + 3)
-                    if (a != null && addr and 0x80 != 0 && attr and 3 == 1 && a.ep < 0) {
+                    // iso IN data endpoint; skip explicit-feedback endpoints (usage bits 01), which playback interfaces have
+                    if (a != null && addr and 0x80 != 0 && attr and 3 == 1 && (attr shr 4) and 3 != 1 && a.ep < 0) {
                         a.ep = addr
                         a.maxPacket = (u8(i + 4) or (u8(i + 5) shl 8)) and 0x7FF
                     }
@@ -101,10 +106,10 @@ object UsbRaw {
             }
             i += len
         }
-        if (uac2) return null
-        val best = alts.filter { it.ep >= 0 && it.channels > 0 && it.subframe in 2..4 }
-            .maxWithOrNull(compareBy<Alt> { it.channels }.thenBy { it.bits }) ?: return null
-        return RawSpec(null, best.iface, best.alt, best.ep, best.maxPacket, best.channels, best.subframe, best.bits, best.rates)
+        if (uac2) return emptyList()
+        return alts.filter { it.ep >= 0 && it.channels > 0 && it.subframe in 2..4 }
+            .sortedWith(compareByDescending<Alt> { it.channels }.thenByDescending { it.bits })
+            .map { RawSpec(null, it.iface, it.alt, it.ep, it.maxPacket, it.channels, it.subframe, it.bits, it.rates) }
     }
 
     private fun rate3(b: ByteArray, k: Int) =

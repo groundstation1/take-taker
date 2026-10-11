@@ -189,6 +189,18 @@ fun SetupScreen(vm: AppModel, tick: State<Long>) {
             Spacer(Modifier.weight(1f))
             Label("${vm.bits} bit flac", color = C.faint)
         }
+        // raw USB sources that offer several sample formats: 16 bit is lighter on the device
+        vm.selectedSources.filter { it.raw && vm.rawFormats(it.key).size > 1 }.forEach { s ->
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Label("bits", Modifier.width(44.dp))
+                vm.rawFormats(s.key).map { it.bits }.sorted().forEach { b ->
+                    Chip("$b", s.usb?.bits == b) { vm.pickBits(s, b) }
+                }
+                Spacer(Modifier.weight(1f))
+                Label(if ((s.usb?.bits ?: 24) <= 16) "lighter usb load" else s.name, color = C.faint)
+            }
+        }
         Spacer(Modifier.height(18.dp))
 
         val engine = vm.engine

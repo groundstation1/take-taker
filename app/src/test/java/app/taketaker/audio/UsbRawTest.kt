@@ -16,5 +16,9 @@ class UsbRawTest {
         assertEquals(3, s.subframe)
         assertEquals(24, s.bits)
         assertEquals(listOf(44100), s.rates)
+        val all = UsbRaw.parseAll(bytes)
+        assertEquals(listOf(24 to 2, 16 to 1), all.map { it.bits to it.alt })
+        assertEquals(360, all[1].maxPacket)
+        assertEquals(2, all[1].subframe)
     }
 }

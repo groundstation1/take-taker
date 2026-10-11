@@ -28,6 +28,9 @@ record, trim, and save as lossless stems and/or an MP3 mixdown.
     stream itself (`src/main/cpp/usbiso.c`, usbfs, no root). Every channel, untouched. Needs a
     one-time USB permission; Android can't use the device while the app holds it. USB Audio
     Class 1 only for now (UAC2 devices fall back to system).
+    If the device offers several sample formats, setup shows a **bits** choice. 16 bit means
+    less USB work for the device, which can help small synths that are near their CPU limit
+    (the FM-1 only carries 16-bit audio in its 24-bit format anyway).
   - **system** — the normal Android audio path. Works with anything, but is subject to the vendor
     audio policy: on a Galaxy S23 Ultra / Android 16 the HAL opens the FM-1 at 4 channels and then
     downmixes to stereo for apps. The app detects this and says so.
