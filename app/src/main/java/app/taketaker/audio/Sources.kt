@@ -5,6 +5,7 @@ import android.hardware.usb.UsbManager
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.MediaRecorder
 
 /**
  * One physical input. A USB interface can be reachable two ways: through Android's audio
@@ -22,6 +23,7 @@ data class Source(
     val usbDevice: UsbDevice? = null,
     val usb: RawSpec? = null,
     val raw: Boolean = false,
+    val mic: MicMode? = null,
 ) {
     enum class Kind(val label: String) { USB("usb"), MIC("mic"), JACK("jack"), LINE("line") }
 
@@ -39,6 +41,16 @@ data class Source(
     fun asRaw(spec: RawSpec) = copy(
         usb = spec, raw = true, channels = spec.channels, nativeRate = spec.rate, hiRes = spec.bits > 16,
     )
+}
+
+/**
+ * The built-in mics are one input to an app; what differs is the recording preset, i.e. which
+ * capsules are combined and what processing the vendor applies on top.
+ */
+enum class MicMode(val label: String, val blurb: String, val channels: Int, val presets: List<Int>) {
+    STEREO("stereo", "dual mic · general", 2, listOf(MediaRecorder.AudioSource.CAMCORDER)),
+    VOICE("voice", "speech · noise suppressed", 1, listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION)),
+    CLEAN("clean", "mono · no processing", 1, listOf(MediaRecorder.AudioSource.UNPROCESSED, MediaRecorder.AudioSource.VOICE_RECOGNITION)),
 }
 
 object Sources {

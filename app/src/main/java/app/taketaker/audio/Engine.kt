@@ -214,13 +214,11 @@ class Engine(
                 add(AudioFormat.ENCODING_PCM_16BIT)
                 add(AudioFormat.ENCODING_PCM_FLOAT)
             }
-            val inputs = buildList {
-                // built-in mics: the camcorder preset is what gets real stereo on most phones
-                if (src.kind == Source.Kind.MIC && n == 2) add(MediaRecorder.AudioSource.CAMCORDER)
-                add(MediaRecorder.AudioSource.UNPROCESSED)
-                add(MediaRecorder.AudioSource.VOICE_PERFORMANCE)
-                add(MediaRecorder.AudioSource.MIC)
-            }
+            val inputs = src.mic?.presets ?: listOf(
+                MediaRecorder.AudioSource.UNPROCESSED,
+                MediaRecorder.AudioSource.VOICE_PERFORMANCE,
+                MediaRecorder.AudioSource.MIC,
+            )
             var best: AudioRecord? = null
             var bestCh = -1
             for (enc in encodings) for (input in inputs) {

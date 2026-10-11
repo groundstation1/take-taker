@@ -21,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import app.taketaker.audio.Engine
+import app.taketaker.audio.MicMode
 import app.taketaker.audio.Exporter
 import app.taketaker.audio.Player
 import app.taketaker.audio.SaveMode
@@ -96,6 +97,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     /** A source as it will be captured, raw or system, per the user's choice. */
     fun effective(s: Source): Source {
+        if (s.kind == Source.Kind.MIC) {
+            val m = micPref[s.key] ?: MicMode.STEREO
+            return s.copy(mic = m, channels = minOf(m.channels, maxOf(s.channels, 1)))
+        }
         val wantRaw = s.canRaw && (rawPref[s.key] ?: true) || !s.canSystem
         if (!wantRaw) return s
         // default to the lightest format at full channel count: class-1 USB devices are small
@@ -181,6 +186,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun setRaw(s: Source, raw: Boolean) {
         rawPref = rawPref + (s.key to raw)
+    }
+
+    /** Built-in mic recording preset per mic source (absent = stereo). */
+    var micPref by mutableStateOf(emptyMap<String, MicMode>()); private set
+
+    fun setMic(s: Source, m: MicMode) {
+        micPref = micPref + (s.key to m)
     }
 
     fun rescan() {

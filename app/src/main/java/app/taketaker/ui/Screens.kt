@@ -49,6 +49,7 @@ import app.taketaker.AppModel
 import app.taketaker.ExportState
 import app.taketaker.Row as SetupRow
 import app.taketaker.Transport
+import app.taketaker.audio.MicMode
 import app.taketaker.audio.SaveMode
 import app.taketaker.audio.Source
 import kotlinx.coroutines.delay
@@ -88,6 +89,7 @@ fun SourcesScreen(vm: AppModel, granted: Boolean, requestPermission: () -> Unit)
                         selected = s.key in vm.selected,
                         onClick = { vm.toggleSource(s.key) },
                         onMode = { raw -> vm.setRaw(s, raw) },
+                        onMic = { m -> vm.setMic(s, m) },
                     )
                 }
                 if (vm.sources.isEmpty()) item {
@@ -111,7 +113,9 @@ fun SourcesScreen(vm: AppModel, granted: Boolean, requestPermission: () -> Unit)
 }
 
 @Composable
-private fun SourceCard(s: Source, selected: Boolean, onClick: () -> Unit, onMode: (Boolean) -> Unit) {
+private fun SourceCard(
+    s: Source, selected: Boolean, onClick: () -> Unit, onMode: (Boolean) -> Unit, onMic: (MicMode) -> Unit,
+) {
     val shape = RoundedCornerShape(18.dp)
     Column(
         Modifier
@@ -163,6 +167,17 @@ private fun SourceCard(s: Source, selected: Boolean, onClick: () -> Unit, onMode
                 style = T.body.copy(fontSize = 12.sp, color = C.faint),
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
+        }
+    }
+    val mic = s.mic
+    if (mic != null) {
+        Hairline(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
+        Column(Modifier.fillMaxWidth().padding(start = 54.dp, end = 18.dp, top = 10.dp, bottom = 12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MicMode.entries.forEach { m -> Chip(m.label, m == mic) { onMic(m) } }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(mic.blurb, style = T.body.copy(fontSize = 12.sp, color = C.faint), maxLines = 1)
         }
     }
     }
