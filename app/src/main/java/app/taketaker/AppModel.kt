@@ -98,7 +98,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     fun effective(s: Source): Source {
         val wantRaw = s.canRaw && (rawPref[s.key] ?: true) || !s.canSystem
         if (!wantRaw) return s
-        val spec = rawFormats(s.key).let { fs -> fs.firstOrNull { it.bits == rawBits[s.key] } ?: fs.firstOrNull() }
+        // default to the lightest format at full channel count: class-1 USB devices are small
+        // gadgets, and their deeper formats often just pad 16-bit audio (the FM-1 does)
+        val spec = rawFormats(s.key).let { fs -> fs.firstOrNull { it.bits == rawBits[s.key] } ?: fs.lastOrNull() }
         return if (spec != null) s.asRaw(spec) else s.copy(raw = true)
     }
 

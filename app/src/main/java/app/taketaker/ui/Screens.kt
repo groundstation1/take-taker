@@ -185,21 +185,12 @@ fun SetupScreen(vm: AppModel, tick: State<Long>) {
         Spacer(Modifier.height(16.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Label("rate", Modifier.width(44.dp))
-            vm.rateOptions.forEach { r -> Chip(rateLabel(r), r == vm.rate) { vm.pickRate(r) } }
+            val rates = vm.rateOptions
+            // a choice only looks like one when there is something to choose
+            if (rates.size > 1) rates.forEach { r -> Chip(rateLabel(r), r == vm.rate) { vm.pickRate(r) } }
+            else Text("${rateLabel(vm.rate)}hz", style = T.data.copy(color = C.dim))
             Spacer(Modifier.weight(1f))
             Label("${vm.bits} bit flac", color = C.faint)
-        }
-        // raw USB sources that offer several sample formats: 16 bit is lighter on the device
-        vm.selectedSources.filter { it.raw && vm.rawFormats(it.key).size > 1 }.forEach { s ->
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Label("bits", Modifier.width(44.dp))
-                vm.rawFormats(s.key).map { it.bits }.sorted().forEach { b ->
-                    Chip("$b", s.usb?.bits == b) { vm.pickBits(s, b) }
-                }
-                Spacer(Modifier.weight(1f))
-                Label(if ((s.usb?.bits ?: 24) <= 16) "lighter usb load" else s.name, color = C.faint)
-            }
         }
         Spacer(Modifier.height(18.dp))
 
@@ -251,6 +242,9 @@ fun SetupScreen(vm: AppModel, tick: State<Long>) {
                 }
                 i += pair.size
             }
+            // tucked away: usb sample format for raw sources that offer more than one
+            val tunable = vm.selectedSources.filter { it.raw && vm.rawFormats(it.key).size > 1 }
+            if (tunable.isNotEmpty()) item(key = "usbfmt") { UsbFormat(vm, tunable) }
         }
         Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -258,6 +252,35 @@ fun SetupScreen(vm: AppModel, tick: State<Long>) {
                 Text("${vm.rows.count { it.on }} ch", style = T.readout)
             }
             PrimaryButton("go live  →", vm::toLive, enabled = vm.rows.any { it.on })
+        }
+    }
+}
+
+@Composable
+private fun UsbFormat(vm: AppModel, sources: List<Source>) {
+    var open by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(top = 18.dp)) {
+        Label(
+            "usb format · " + sources.joinToString { "${it.usb?.bits ?: "?"} bit" } + if (open) "  ▾" else "  ▸",
+            Modifier.clip(CircleShape).clickable { open = !open }.padding(vertical = 8.dp),
+            color = C.faint,
+        )
+        if (open) sources.forEach { s ->
+            Row(
+                Modifier.padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                vm.rawFormats(s.key).map { it.bits }.sorted().forEach { b ->
+                    Chip("$b bit", s.usb?.bits == b) { vm.pickBits(s, b) }
+                }
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    if (sources.size > 1) s.name else "16 is lighter on the device",
+                    style = T.body.copy(fontSize = 12.sp, color = C.faint),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
