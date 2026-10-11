@@ -1,6 +1,7 @@
 package app.taketaker.audio
 
 import android.annotation.SuppressLint
+import android.hardware.usb.UsbManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -17,10 +18,16 @@ import kotlin.math.max
  */
 class Engine(
     private val workDir: File,
+    private val usbManager: UsbManager,
     val sources: List<Source>,
     val rate: Int,
-    private val onError: (String) -> Unit,
+    private val onErrorUi: (String) -> Unit,
 ) {
+    private fun onError(msg: String) {
+        android.util.Log.w("TakeTaker", msg)
+        onErrorUi(msg)
+    }
+
     val offsets: IntArray = sources.runningFold(0) { acc, s -> acc + s.channels }.dropLast(1).toIntArray()
     val channelCount = sources.sumOf { it.channels }
 
@@ -61,6 +68,10 @@ class Engine(
         override fun run() {
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             val n = src.channels
+            if (src.raw) {
+                try { rawRun(n) } catch (e: Exception) { onError("${src.name}: ${e.message}") }
+                return
+            }
             val rec = openVerified(n)
             if (rec == null) { onError("couldn't open ${src.name}"); return }
             try {
@@ -81,7 +92,6 @@ class Engine(
             val bbuf = ByteArray(if (enc == AudioFormat.ENCODING_PCM_24BIT_PACKED) frames * n * 3 else 0)
             val chBuf = Array(n) { FloatArray(frames) }
             val scratch = ByteBuffer.allocate(frames * 4).order(ByteOrder.LITTLE_ENDIAN)
-            val decay = 0.82f
             while (running) {
                 val samples = when (enc) {
                     AudioFormat.ENCODING_PCM_FLOAT -> rec.read(fbuf, 0, fbuf.size, AudioRecord.READ_BLOCKING)
@@ -106,20 +116,89 @@ class Engine(
                 }
                 if (samples < 0) { onError("${src.name} went away"); break }
                 val f = samples / n
+                if (f > 0) deliver(fbuf, f, n, chBuf, scratch)
+            }
+        }
+
+        /** Deinterleave [f] frames, update meters, append to the active take. */
+        private fun deliver(fbuf: FloatArray, f: Int, n: Int, chBuf: Array<FloatArray>, scratch: ByteBuffer) {
+            for (c in 0 until n) {
+                val dst = chBuf[c]
+                var peak = 0f
+                var i = c
+                for (j in 0 until f) { val v = fbuf[i]; dst[j] = v; peak = max(peak, abs(v)); i += n }
+                val g = offset + c
+                meters[g] = max(peak, meters[g] * 0.82f)
+                if (peak >= 0.999f) clips[g] = System.currentTimeMillis()
+            }
+            val t = take ?: return
+            synchronized(lock) {
+                if (take === t) for (c in 0 until n) t.append(offset + c, chBuf[c], f, scratch)
+            }
+        }
+
+        /** Direct USB: claim the streaming interface and read iso packets ourselves. */
+        private fun rawRun(n: Int) {
+            val spec = src.usb ?: error("no usb spec")
+            val dev = spec.device ?: error("no usb device")
+            val conn = usbManager.openDevice(dev) ?: error("no usb permission")
+            val intf = (0 until dev.interfaceCount).map { dev.getInterface(it) }
+                .firstOrNull { it.id == spec.iface && it.alternateSetting == spec.alt }
+                ?: run { conn.close(); error("interface ${spec.iface}/${spec.alt} missing") }
+            try {
+                if (!conn.claimInterface(intf, true)) error("couldn't claim usb interface")
+                if (!conn.setInterface(intf)) error("couldn't select alt setting ${spec.alt}")
+                if (spec.rates.size > 1) { // UAC1 SET_CUR sampling frequency on the endpoint
+                    val r = rate
+                    val data = byteArrayOf(r.toByte(), (r shr 8).toByte(), (r shr 16).toByte())
+                    conn.controlTransfer(0x22, 0x01, 0x0100, spec.ep, data, 3, 500)
+                }
+                val pkts = 8
+                val h = UsbIso.open(conn.fileDescriptor, spec.ep, spec.maxPacket, pkts, 8)
+                if (h in -4095L..0L) error("usb stream failed (errno ${-h})") // real handles may look negative (tagged pointers)
+                try {
+                    rawLoop(h, spec, n, pkts)
+                } finally {
+                    UsbIso.close(h)
+                }
+            } finally {
+                // back to the zero-bandwidth alt setting before letting go
+                (0 until dev.interfaceCount).map { dev.getInterface(it) }
+                    .firstOrNull { it.id == spec.iface && it.alternateSetting == 0 }
+                    ?.let { runCatching { conn.setInterface(it) } }
+                conn.releaseInterface(intf)
+                UsbIso.reattach(conn.fileDescriptor, spec.iface)
+                conn.close()
+            }
+        }
+
+        private fun rawLoop(h: Long, spec: RawSpec, n: Int, pkts: Int) {
+            val bytes = ByteArray(spec.maxPacket * pkts)
+            val frameBytes = spec.subframe * spec.channels
+            val maxFrames = bytes.size / frameBytes + 1
+            val fbuf = FloatArray(maxFrames * spec.channels)
+            val chBuf = Array(n) { FloatArray(maxFrames) }
+            val scratch = ByteBuffer.allocate(maxFrames * 4).order(ByteOrder.LITTLE_ENDIAN)
+            val sub = spec.subframe
+            val scale = when (sub) { 2 -> 1f / 32768f; 3 -> 1f / 8388608f; else -> 1f / 2147483648f }
+            while (running) {
+                val got = UsbIso.read(h, bytes)
+                if (got < 0) { onError("${src.name} went away"); break }
+                val f = got / frameBytes
                 if (f == 0) continue
-                for (c in 0 until n) {
-                    val dst = chBuf[c]
-                    var peak = 0f
-                    var i = c
-                    for (j in 0 until f) { val v = fbuf[i]; dst[j] = v; peak = max(peak, abs(v)); i += n }
-                    val g = offset + c
-                    meters[g] = max(peak, meters[g] * decay)
-                    if (peak >= 0.999f) clips[g] = System.currentTimeMillis()
+                val samples = f * spec.channels
+                var p = 0
+                for (k in 0 until samples) {
+                    val v = when (sub) {
+                        2 -> (bytes[p].toInt() and 0xFF) or (bytes[p + 1].toInt() shl 8)
+                        3 -> (bytes[p].toInt() and 0xFF) or ((bytes[p + 1].toInt() and 0xFF) shl 8) or (bytes[p + 2].toInt() shl 16)
+                        else -> (bytes[p].toInt() and 0xFF) or ((bytes[p + 1].toInt() and 0xFF) shl 8) or
+                            ((bytes[p + 2].toInt() and 0xFF) shl 16) or (bytes[p + 3].toInt() shl 24)
+                    }
+                    fbuf[k] = v * scale
+                    p += sub
                 }
-                val t = take ?: continue
-                synchronized(lock) {
-                    if (take === t) for (c in 0 until n) t.append(offset + c, chBuf[c], f, scratch)
-                }
+                deliver(fbuf, f, n, chBuf, scratch)
             }
         }
 

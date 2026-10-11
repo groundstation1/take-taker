@@ -23,11 +23,14 @@ record, trim, and save as lossless stems and/or an MP3 mixdown.
 
 ## Known limitations
 
-- **Samsung (and possibly other OEM) phones cap USB capture at 2 channels for apps.**
-  On a Galaxy S23 Ultra / Android 16 the Qualcomm HAL opens the FM-1 at 4 channels, but the
-  vendor audio policy routes every app recording through a 16-bit stereo input and downmixes.
-  The app detects this and tells you ("opened 2 of 4 channels"). Getting around it needs a
-  userspace USB audio driver (isochronous transfers over usbfs) — not done yet.
+- **Two capture paths for USB interfaces**, switchable per device on the source screen:
+  - **raw** — the app claims the device's USB audio streaming interface and reads the isochronous
+    stream itself (`src/main/cpp/usbiso.c`, usbfs, no root). Every channel, untouched. Needs a
+    one-time USB permission; Android can't use the device while the app holds it. USB Audio
+    Class 1 only for now (UAC2 devices fall back to system).
+  - **system** — the normal Android audio path. Works with anything, but is subject to the vendor
+    audio policy: on a Galaxy S23 Ultra / Android 16 the HAL opens the FM-1 at 4 channels and then
+    downmixes to stereo for apps. The app detects this and says so.
 - Multiple sources record side by side with best-effort sync; independent device clocks will drift
   slowly over long takes.
 - Raw takes are buffered uncompressed in the app cache until saved (~700 KB/s for 4 ch @ 44.1 kHz).
@@ -38,7 +41,8 @@ record, trim, and save as lossless stems and/or an MP3 mixdown.
 
 ## Build
 
-Android SDK 36, JDK 17+.
+Android SDK 36, NDK 28.2 (the one C file is compiled by a small Gradle task calling the
+NDK's clang directly; ndk-build can't cope with spaces in the project path), JDK 17+.
 
 ```bash
 ./gradlew :app:assembleDebug
@@ -52,7 +56,9 @@ adb install -r -g app/build/outputs/apk/debug/app-debug.apk
 ```
 app/src/main/java/app/taketaker/
   AppModel.kt        state machine (source → setup → live ⇄ trim, save)
-  audio/Engine.kt    one capture thread per input, meters, streams takes to disk
+  audio/Engine.kt    one capture thread per input (AudioRecord or raw USB), meters, takes to disk
+  audio/UsbRaw.kt    UAC1 descriptor parsing + JNI binding for the iso reader
+cpp/usbiso.c         isochronous IN streaming over usbfs
   audio/Take.kt      raw float32 per channel + peak summaries
   audio/Flac.kt      FLAC encoder
   audio/Exporter.kt  stems / mixdown / MediaStore publishing

@@ -1,20 +1,32 @@
 package app.taketaker.audio
 
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 
-/** One physical input we can capture from. [channels] is how many we'll open it with. */
+/**
+ * One physical input. A USB interface can be reachable two ways: through Android's audio
+ * stack ([device], "system") and/or directly over USB ([usb], "raw"). [raw] says which
+ * one this instance will be captured with; [channels]/[nativeRate]/[hiRes] follow it.
+ */
 data class Source(
-    val id: Int,
+    val key: String,
     val name: String,
     val kind: Kind,
     val channels: Int,
     val nativeRate: Int,
     val hiRes: Boolean,
-    val device: AudioDeviceInfo,
+    val device: AudioDeviceInfo?,
+    val usbDevice: UsbDevice? = null,
+    val usb: RawSpec? = null,
+    val raw: Boolean = false,
 ) {
     enum class Kind(val label: String) { USB("usb"), MIC("mic"), JACK("jack"), LINE("line") }
+
+    val canRaw get() = usbDevice != null
+    val canSystem get() = device != null
 
     /** Short lowercase handle used for default track names, e.g. "melodee". */
     val handle: String
@@ -22,6 +34,11 @@ data class Source(
             Kind.MIC -> "mic"
             else -> name.lowercase().split(' ', '-', '_').firstOrNull { it.isNotBlank() } ?: kind.label
         }
+
+    /** This source as captured raw, once its descriptors are known. */
+    fun asRaw(spec: RawSpec) = copy(
+        usb = spec, raw = true, channels = spec.channels, nativeRate = spec.rate, hiRes = spec.bits > 16,
+    )
 }
 
 object Sources {
@@ -31,11 +48,25 @@ object Sources {
         AudioFormat.ENCODING_PCM_FLOAT,
     )
 
-    fun scan(am: AudioManager): List<Source> =
-        am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+    /** Everything Android's audio stack offers, merged with raw-capable USB devices. */
+    fun scan(am: AudioManager, um: UsbManager): List<Source> {
+        val system = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
             .filter { it.isSource }
             .mapNotNull(::describe)
-            .sortedBy { it.kind.ordinal }
+        val usb = UsbRaw.candidates(um)
+        val out = system.map { s ->
+            val match = if (s.kind == Source.Kind.USB) usb.firstOrNull { usbName(it) == s.name } else null
+            if (match != null) s.copy(key = usbKey(match), usbDevice = match) else s
+        }.toMutableList()
+        // raw-capable devices Android isn't routing (e.g. still detached from a previous raw session)
+        for (d in usb) if (out.none { it.usbDevice == d }) {
+            out += Source(usbKey(d), usbName(d), Source.Kind.USB, 2, 48000, false, null, usbDevice = d)
+        }
+        return out.sortedBy { it.kind.ordinal }
+    }
+
+    private fun usbKey(d: UsbDevice) = "usb:${d.vendorId}:${d.productId}:${d.deviceName}"
+    private fun usbName(d: UsbDevice) = d.productName?.takeIf { it.isNotBlank() } ?: "USB audio"
 
     private fun describe(d: AudioDeviceInfo): Source? {
         val kind = when (d.type) {
@@ -65,7 +96,7 @@ object Sources {
             else -> d.productName?.toString()?.removePrefix("USB-Audio - ")?.takeIf { it.isNotBlank() } ?: kind.label.uppercase()
         }
         return Source(
-            id = d.id,
+            key = "audio:${d.id}",
             name = name,
             kind = kind,
             channels = channels,

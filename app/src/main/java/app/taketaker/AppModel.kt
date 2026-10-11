@@ -1,7 +1,14 @@
 package app.taketaker
 
 import android.app.Application
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import androidx.core.content.ContextCompat
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -21,6 +28,8 @@ import app.taketaker.audio.Source
 import app.taketaker.audio.Sources
 import app.taketaker.audio.Take
 import app.taketaker.audio.Track
+import app.taketaker.audio.RawSpec
+import app.taketaker.audio.UsbRaw
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -31,7 +40,7 @@ enum class Transport { IDLE, REC, PLAY }
 
 /** One input channel in setup. [linkNext] pairs it with the following channel as a stereo track. */
 data class Row(
-    val sourceId: Int,
+    val sourceId: String,
     val ch: Int,
     val global: Int,
     val name: String,
@@ -54,12 +63,16 @@ sealed interface ExportState {
 
 class AppModel(app: Application) : AndroidViewModel(app) {
     private val am = app.getSystemService(AudioManager::class.java)
+    private val um = app.getSystemService(UsbManager::class.java)
     private val main = Handler(Looper.getMainLooper())
     private val workDir = File(app.cacheDir, "takes").apply { deleteRecursively(); mkdirs() }
 
     var screen by mutableStateOf(Screen.SOURCES); private set
     var sources by mutableStateOf(emptyList<Source>()); private set
-    var selected by mutableStateOf(emptyList<Int>()); private set
+    var selected by mutableStateOf(emptyList<String>()); private set
+    /** Per USB source: capture raw (true) or through Android (false). Absent = raw when possible. */
+    var rawPref by mutableStateOf(emptyMap<String, Boolean>()); private set
+    private var specs = emptyMap<String, RawSpec>()
     var session by mutableStateOf("take")
     var rate by mutableStateOf(48000); private set
     var rows by mutableStateOf(emptyList<Row>()); private set
@@ -79,7 +92,15 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     val trimView = ViewWindow()
     private var player: Player? = null
 
-    val selectedSources get() = selected.mapNotNull { id -> sources.firstOrNull { it.id == id } }
+    /** A source as it will be captured, raw or system, per the user's choice. */
+    fun effective(s: Source): Source {
+        val wantRaw = s.canRaw && (rawPref[s.key] ?: true) || !s.canSystem
+        if (!wantRaw) return s
+        val spec = specs[s.key]
+        return if (spec != null) s.asRaw(spec) else s.copy(raw = true)
+    }
+
+    val selectedSources get() = selected.mapNotNull { k -> sources.firstOrNull { it.key == k } }.map(::effective)
     val rateOptions get() = (selectedSources.map { it.nativeRate }.ifEmpty { listOf(48000) }).distinct().sorted()
     val bits get() = if (selectedSources.any { it.hiRes }) 24 else 16
     val trimmed get() = take != null && (inF > 0 || outF < (take?.frames ?: 0))
@@ -87,9 +108,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private val deviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = rescan()
         override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) {
-            val gone = removed.map { it.id }.toSet()
-            val lost = selectedSources.filter { it.id in gone }
+            val before = selected.toSet()
             rescan()
+            val lost = before.filter { k -> sources.none { it.key == k } }.mapNotNull { k -> engine?.sources?.firstOrNull { it.key == k } }
             if (lost.isNotEmpty() && screen != Screen.SOURCES) {
                 message = "${lost.joinToString { it.name }} disconnected"
                 if (transport == Transport.REC) stopRec()
@@ -97,34 +118,109 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            when (i.action) {
+                ACTION_USB_PERMISSION -> {
+                    val ok = i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    val key = pendingPermission
+                    pendingPermission = null
+                    if (key != null && !ok) {
+                        rawPref = rawPref + (key to false)
+                        message = "no usb access · using system mode"
+                    }
+                    if (key != null) toSetup()
+                }
+                UsbManager.ACTION_USB_DEVICE_ATTACHED, UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    val before = selected.toSet()
+                    rescan()
+                    if (screen != Screen.SOURCES && before.any { k -> sources.none { it.key == k } }) {
+                        message = "usb device disconnected"
+                        if (transport == Transport.REC) stopRec()
+                    }
+                }
+            }
+        }
+    }
+    private var pendingPermission: String? = null
+
     init {
         am.registerAudioDeviceCallback(deviceCallback, main)
+        ContextCompat.registerReceiver(
+            app, usbReceiver,
+            IntentFilter().apply {
+                addAction(ACTION_USB_PERMISSION)
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
+    companion object {
+        const val ACTION_USB_PERMISSION = "app.taketaker.USB_PERMISSION"
+    }
+
+    fun setRaw(s: Source, raw: Boolean) {
+        rawPref = rawPref + (s.key to raw)
     }
 
     fun rescan() {
-        sources = Sources.scan(am)
-        if (screen == Screen.SOURCES) selected = selected.filter { id -> sources.any { it.id == id } }
+        sources = Sources.scan(am, um)
+        if (screen == Screen.SOURCES) selected = selected.filter { k -> sources.any { it.key == k } }
         if (!autoPicked && selected.isEmpty()) {
-            sources.firstOrNull { it.kind == Source.Kind.USB }?.let { selected = listOf(it.id); autoPicked = true }
+            sources.firstOrNull { it.kind == Source.Kind.USB }?.let { selected = listOf(it.key); autoPicked = true }
         }
     }
 
     private var autoPicked = false
 
-    fun toggleSource(id: Int) {
-        selected = if (id in selected) selected - id else selected + id
+    fun toggleSource(key: String) {
+        selected = if (key in selected) selected - key else selected + key
+    }
+
+    /**
+     * Raw sources need USB permission and their descriptors before we know channel layout.
+     * Returns false while a permission dialog is up (toSetup re-runs when it is answered).
+     */
+    private fun prepareRaw(): Boolean {
+        for (k in selected) {
+            val s = sources.firstOrNull { it.key == k } ?: continue
+            if (!effective(s).raw || specs.containsKey(k)) continue
+            val dev: UsbDevice = s.usbDevice ?: continue
+            if (!um.hasPermission(dev)) {
+                pendingPermission = k
+                val ctx = getApplication<Application>()
+                val pi = PendingIntent.getBroadcast(
+                    ctx, 0, Intent(ACTION_USB_PERMISSION).setPackage(ctx.packageName),
+                    PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                )
+                um.requestPermission(dev, pi)
+                return false
+            }
+            val spec = UsbRaw.probe(um, dev)
+            if (spec == null) {
+                rawPref = rawPref + (k to false)
+                message = "${s.name}: raw mode needs a usb audio class 1 device"
+            } else {
+                specs = specs + (k to spec)
+            }
+        }
+        return true
     }
 
     // ---- setup -------------------------------------------------------------
 
     fun toSetup() {
+        if (!prepareRaw()) return
+        if (selectedSources.isEmpty()) { message = "nothing to record from"; return }
         val old = rows.associateBy { it.sourceId to it.ch }
         var g = 0
         rows = selectedSources.flatMap { s ->
             (0 until s.channels).map { c ->
-                val prev = old[s.id to c]
+                val prev = old[s.key to c]
                 val name = prev?.name ?: if (s.channels == 1 || (s.kind == Source.Kind.MIC)) s.handle else "${s.handle} ${c + 1}"
-                Row(s.id, c, g++, name, prev?.on ?: true,
+                Row(s.key, c, g++, name, prev?.on ?: true,
                     prev?.linkNext ?: (s.channels == 2 && c == 0 && s.kind != Source.Kind.USB))
             }
         }
@@ -144,7 +240,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         stopPlay()
         discardTake()
         engine?.release()
-        engine = Engine(workDir, selectedSources, rate) { msg -> main.post { message = msg } }.also { it.start() }
+        engine = Engine(workDir, um, selectedSources, rate) { msg -> main.post { message = msg } }.also { it.start() }
     }
 
     fun rename(row: Row, name: String) = updateRow(row) { it.copy(name = name) }
@@ -338,6 +434,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         am.unregisterAudioDeviceCallback(deviceCallback)
+        runCatching { getApplication<Application>().unregisterReceiver(usbReceiver) }
         player?.stop()
         engine?.release()
         setService(false)

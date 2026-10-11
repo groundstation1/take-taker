@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "app.taketaker"
     compileSdk = 36
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "app.taketaker"
@@ -28,6 +29,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/usbiso"))
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
@@ -44,3 +46,32 @@ dependencies {
     implementation("de.sciss:jump3r:1.0.5")
     testImplementation("junit:junit:4.13.2")
 }
+
+// One C file, so skip ndk-build/CMake (ndk-build chokes on spaces in the project path)
+// and call the NDK's clang directly for each ABI.
+val usbIsoAbis = mapOf(
+    "arm64-v8a" to "aarch64-linux-android29",
+    "armeabi-v7a" to "armv7a-linux-androideabi29",
+    "x86_64" to "x86_64-linux-android29",
+)
+val buildUsbIso by tasks.registering {
+    val src = file("src/main/cpp/usbiso.c")
+    val outDir = layout.buildDirectory.dir("generated/usbiso")
+    inputs.file(src)
+    outputs.dir(outDir)
+    doLast {
+        val host = if (System.getProperty("os.name").startsWith("Windows")) "windows-x86_64" else
+            if (System.getProperty("os.name").startsWith("Mac")) "darwin-x86_64" else "linux-x86_64"
+        val clang = android.ndkDirectory.resolve("toolchains/llvm/prebuilt/$host/bin/clang" +
+            if (host.startsWith("windows")) ".exe" else "")
+        for ((abi, target) in usbIsoAbis) {
+            val out = outDir.get().file("$abi/libusbiso.so").asFile
+            out.parentFile.mkdirs()
+            providers.exec {
+                commandLine(clang.absolutePath, "--target=$target", "-shared", "-fPIC", "-O2", "-Wall",
+                    "-Wl,-z,max-page-size=16384", "-o", out.absolutePath, src.absolutePath)
+            }.result.get().assertNormalExitValue()
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(buildUsbIso) }

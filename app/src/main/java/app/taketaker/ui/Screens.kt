@@ -82,8 +82,13 @@ fun SourcesScreen(vm: AppModel, granted: Boolean, requestPermission: () -> Unit)
             }
         } else {
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(vm.sources, key = { it.id }) { s ->
-                    SourceCard(s, s.id in vm.selected) { vm.toggleSource(s.id) }
+                items(vm.sources, key = { it.key }) { s ->
+                    SourceCard(
+                        s = vm.effective(s),
+                        selected = s.key in vm.selected,
+                        onClick = { vm.toggleSource(s.key) },
+                        onMode = { raw -> vm.setRaw(s, raw) },
+                    )
                 }
                 if (vm.sources.isEmpty()) item {
                     Text("no inputs found.\nplug something in.", style = T.data.copy(color = C.faint))
@@ -106,14 +111,18 @@ fun SourcesScreen(vm: AppModel, granted: Boolean, requestPermission: () -> Unit)
 }
 
 @Composable
-private fun SourceCard(s: Source, selected: Boolean, onClick: () -> Unit) {
+private fun SourceCard(s: Source, selected: Boolean, onClick: () -> Unit, onMode: (Boolean) -> Unit) {
     val shape = RoundedCornerShape(18.dp)
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(if (selected) C.raised else C.surface)
-            .border(1.dp, if (selected) C.text.copy(alpha = 0.5f) else C.line, shape)
+            .border(1.dp, if (selected) C.text.copy(alpha = 0.5f) else C.line, shape),
+    ) {
+    Row(
+        Modifier
+            .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -128,12 +137,34 @@ private fun SourceCard(s: Source, selected: Boolean, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(s.name, style = T.name.copy(fontSize = 17.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(3.dp))
-            Label("${s.kind.label} · ${rateLabel(s.nativeRate)}hz · ${if (s.hiRes) "24" else "16"} bit")
+            val known = !s.raw || s.usb != null
+            Label(
+                if (known) "${s.kind.label} · ${rateLabel(s.nativeRate)}hz · ${if (s.hiRes) "24" else "16"} bit"
+                else "${s.kind.label} · format read on open",
+            )
         }
         Column(horizontalAlignment = Alignment.End) {
             Text("%02d".format(s.channels), style = T.readout.copy(fontSize = 24.sp, color = if (selected) C.text else C.dim))
             Label("in", color = C.faint)
         }
+    }
+    if (s.canRaw) {
+        Hairline(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
+        Row(
+            Modifier.fillMaxWidth().padding(start = 54.dp, end = 18.dp, top = 10.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Chip("raw", s.raw) { onMode(true) }
+            if (s.canSystem) Chip("system", !s.raw) { onMode(false) }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (s.raw) "direct usb · every channel" else "via android · may be limited",
+                style = T.body.copy(fontSize = 12.sp, color = C.faint),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
     }
 }
 
@@ -167,11 +198,11 @@ fun SetupScreen(vm: AppModel, tick: State<Long>) {
             var trackNo = 0
             while (i < rows.size) {
                 val r = rows[i]
-                val src = vm.selectedSources.firstOrNull { it.id == r.sourceId }
+                val src = vm.selectedSources.firstOrNull { it.key == r.sourceId }
                 if (r.ch == 0 && src != null) {
                     item(key = "h${r.sourceId}") {
                         Label(
-                            "${src.name} · ${src.kind.label} · ${src.channels} in",
+                            "${src.name} · ${if (src.raw) "usb raw" else src.kind.label} · ${src.channels} in",
                             Modifier.padding(top = if (i == 0) 0.dp else 14.dp, bottom = 4.dp),
                         )
                     }
