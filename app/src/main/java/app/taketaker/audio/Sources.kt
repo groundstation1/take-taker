@@ -50,9 +50,14 @@ object Sources {
 
     /** Everything Android's audio stack offers, merged with raw-capable USB devices. */
     fun scan(am: AudioManager, um: UsbManager): List<Source> {
-        val system = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+        val described = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
             .filter { it.isSource }
             .mapNotNull(::describe)
+        // Android hands one app a single built-in-mic input no matter which capsule it asks for,
+        // so separate "bottom"/"back" sources would just record the same stream. Offer one.
+        val mics = described.filter { it.kind == Source.Kind.MIC }
+        val system = described.filter { it.kind != Source.Kind.MIC } +
+            listOfNotNull(mics.firstOrNull()?.copy(channels = mics.maxOf { it.channels }))
         val usb = UsbRaw.candidates(um)
         val out = system.map { s ->
             val match = if (s.kind == Source.Kind.USB) usb.firstOrNull { usbName(it) == s.name } else null
@@ -92,7 +97,7 @@ object Sources {
             else -> rates.max()
         }
         val name = when (kind) {
-            Source.Kind.MIC -> "Phone mic" + d.address.takeIf { it.isNotBlank() && it.length < 16 }?.let { " · $it" }.orEmpty()
+            Source.Kind.MIC -> "Phone mic"
             else -> d.productName?.toString()?.removePrefix("USB-Audio - ")?.takeIf { it.isNotBlank() } ?: kind.label.uppercase()
         }
         return Source(

@@ -34,6 +34,10 @@ record, trim, and save as lossless stems and/or an MP3 mixdown.
   - **system** — the normal Android audio path. Works with anything, but is subject to the vendor
     audio policy: on a Galaxy S23 Ultra / Android 16 the HAL opens the FM-1 at 4 channels and then
     downmixes to stereo for apps. The app detects this and says so.
+- The phone's built-in mics show up as one **Phone mic** source. Android gives an app a single
+  built-in-mic input whichever capsule it asks for (selecting "bottom" and "back" separately
+  recorded bit-identical audio). Stereo goes through the camcorder preset, which on the S23
+  routes to the real dual-mic input; other presets just duplicate mono into both channels.
 - Multiple sources record side by side with best-effort sync; independent device clocks will drift
   slowly over long takes.
 - Raw takes are buffered uncompressed in the app cache until saved (~700 KB/s for 4 ch @ 44.1 kHz).
