@@ -18,8 +18,16 @@ record, trim, and save as lossless stems and/or an MP3 mixdown.
   (10 s → 5 min window) with a 1 s / 10 s / minute tick hierarchy so zooming keeps its feel;
   pinch to zoom, drag to pan, double-tap to follow again, tap to place the play cursor.
 - **trim** — drag in/out handles, play the selection.
-- **save** — multitrack (one FLAC per track), multitrack + MP3 mix, or MP3 mix only.
-  Files land in `Music/TakeTaker/<name>_<yyyy-MM-dd_HHmm>/`.
+- **save** — multitrack (one FLAC per track), multitrack + MP3 mix, or MP3 mix only, with the
+  mix optionally normalized to -1 dBFS. Files land in `Music/TakeTaker/<name>_<yyyy-MM-dd_HHmm>/`.
+  Optionally also an **MP4** in `Movies/TakeTaker/`: the camera footage recorded alongside the take
+  (copied without re-encoding, lined up with the audio), or — without footage — a rendered waveform
+  video (lanes, playhead, meters, timecode). Either way the soundtrack is the mixdown as AAC.
+- **video** — pick back/front camera in setup to film alongside a take. Video-only capture
+  (CameraX); the audio path doesn't change and the two are aligned by start time at export.
+- **after saving** — preview the mixdown in place, open or share mixdown / video, or share a zip
+  of everything (built only when asked for).
+- Destructive actions (restart, recording over an unsaved take) are press-and-hold.
 
 ## Known limitations
 
@@ -44,6 +52,8 @@ record, trim, and save as lossless stems and/or an MP3 mixdown.
 - Raw takes are buffered uncompressed in the app cache until saved (~700 KB/s for 4 ch @ 44.1 kHz).
 - MP3 is encoded with a pure-Java LAME port ([jump3r](https://github.com/Sciss/jump3r)), so mixdowns
   of long takes are slow-ish.
+- Camera footage can only start on a keyframe, so a trimmed video export may begin up to about a
+  second before the in point (the audio starts at the same moment, so they stay in sync).
 - The FLAC encoder is a small hand-rolled one (fixed predictors + Rice coding). Output is verified
   bit-exact against ffmpeg in `EncoderTest`, but it compresses a bit worse than libFLAC.
 
@@ -69,7 +79,9 @@ app/src/main/java/app/taketaker/
 cpp/usbiso.c         isochronous IN streaming over usbfs
   audio/Take.kt      raw float32 per channel + peak summaries
   audio/Flac.kt      FLAC encoder
-  audio/Exporter.kt  stems / mixdown / MediaStore publishing
+  audio/Exporter.kt  stems / mixdown / MediaStore publishing / zip
+  video/CameraRig.kt video-only CameraX capture alongside a take
+  video/VideoExport.kt  AAC mix + camera remux or rendered waveform video → MP4
   ui/Timeline.kt     ruler, waveforms, gestures, trim handles
   ui/Screens.kt      the screens
 ```

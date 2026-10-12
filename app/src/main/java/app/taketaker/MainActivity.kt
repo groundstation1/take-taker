@@ -94,6 +94,14 @@ private fun App(vm: AppModel) {
     }
     BackHandler(enabled = vm.screen != Screen.SOURCES) { vm.back() }
 
+    // camera lives while a session is open (setup / live / trim) and a facing is picked
+    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val cameraOn = vm.facing != null && vm.screen != Screen.SOURCES
+    LaunchedEffect(vm.facing, cameraOn) {
+        val f = vm.facing
+        if (cameraOn && f != null) vm.camera.bind(owner, f) { vm.message = it } else vm.camera.unbind()
+    }
+
     Box(Modifier.fillMaxSize().background(C.bg).windowInsetsPadding(WindowInsets.safeDrawing)) {
         AnimatedContent(
             targetState = vm.screen,

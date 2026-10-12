@@ -15,6 +15,13 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class Take(val dir: File, val channels: Int, val rate: Int) {
     val startedAt = System.currentTimeMillis()
+    /** Monotonic start, to line up video recorded alongside. */
+    val startNanos = System.nanoTime()
+    /** Camera footage recorded with this take (video only), once finalized. */
+    @Volatile var video: File? = null
+    @Volatile var videoPending = false
+    /** When the video started, relative to the audio (positive = video started later). */
+    @Volatile var videoOffsetUs = 0L
     val files = Array(channels) { File(dir, "ch$it.f32") }
     val peaks = Array(channels) { PeakStore() }
     private val outs = Array(channels) { BufferedOutputStream(FileOutputStream(files[it]), 1 shl 17) }

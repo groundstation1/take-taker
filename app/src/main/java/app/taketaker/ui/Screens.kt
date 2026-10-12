@@ -50,6 +50,7 @@ import app.taketaker.ExportState
 import app.taketaker.Row as SetupRow
 import app.taketaker.Transport
 import app.taketaker.audio.MicMode
+import app.taketaker.video.Facing
 import app.taketaker.audio.SaveMode
 import app.taketaker.audio.Source
 import kotlinx.coroutines.delay
@@ -218,6 +219,8 @@ fun SetupScreen(vm: AppModel, tick: State<Long>) {
             Spacer(Modifier.weight(1f))
             Label("${vm.bits} bit flac", color = C.faint)
         }
+        Spacer(Modifier.height(10.dp))
+        CameraRow(vm)
         Spacer(Modifier.height(18.dp))
 
         val engine = vm.engine
@@ -280,6 +283,42 @@ fun SetupScreen(vm: AppModel, tick: State<Long>) {
             PrimaryButton("go live  →", vm::toLive, enabled = vm.rows.any { it.on })
         }
     }
+}
+
+/** Off / back / front. Video is recorded next to the audio, never mixed into it. */
+@Composable
+private fun CameraRow(vm: AppModel) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var wanted by remember { mutableStateOf<Facing?>(null) }
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { ok -> if (ok) vm.pickCamera(wanted) else vm.message = "no camera access" }
+    fun pick(f: Facing?) {
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.CAMERA) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (f == null || granted) vm.pickCamera(f) else { wanted = f; launcher.launch(android.Manifest.permission.CAMERA) }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Label("video", Modifier.width(44.dp))
+        Chip("off", vm.facing == null) { pick(null) }
+        Facing.entries.forEach { f -> Chip(f.label, vm.facing == f) { pick(f) } }
+    }
+}
+
+/** Live camera preview, small, for framing while recording. */
+@Composable
+fun CameraPip(vm: AppModel, recording: Boolean, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(12.dp)
+    androidx.compose.ui.viewinterop.AndroidView(
+        factory = { c ->
+            androidx.camera.view.PreviewView(c).apply {
+                scaleType = androidx.camera.view.PreviewView.ScaleType.FILL_CENTER
+                implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
+                vm.camera.preview.setSurfaceProvider(surfaceProvider)
+            }
+        },
+        modifier = modifier.clip(shape).border(1.5.dp, if (recording) C.rec else C.line2, shape),
+    )
 }
 
 @Composable
@@ -395,6 +434,10 @@ private fun LiveHeader(vm: AppModel, tick: State<Long>) {
             Label("${rateLabel(vm.rate)}hz · ${vm.bits} bit · ${vm.tracks.size} tracks", color = C.faint)
         }
         StateChip(vm, tick)
+        if (vm.facing != null) {
+            Spacer(Modifier.width(10.dp))
+            CameraPip(vm, vm.transport == Transport.REC, Modifier.width(54.dp).height(72.dp))
+        }
     }
     Spacer(Modifier.height(4.dp))
     // big timecode: recording length, playhead, or cursor
@@ -642,8 +685,12 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
     var mode by remember { mutableStateOf<SaveMode?>(null) }
     var name by remember { mutableStateOf(vm.defaultFileName()) }
     var normalize by remember { mutableStateOf(true) }
+    var video by remember { mutableStateOf(false) }
+    val hasFootage = vm.take?.let { it.video != null || it.videoPending } == true
     val export = vm.export
     val busy = export is ExportState.Running
+    // back closes the sheet (or steps back inside it) instead of leaving the take screen
+    androidx.activity.compose.BackHandler(enabled = !busy) { if (mode != null && export == null) mode = null else onClose() }
 
     Box(
         Modifier.fillMaxSize()
@@ -693,8 +740,14 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
                         if (mode == SaveMode.MIX) "→ Music/TakeTaker/$slugged.mp3" else "→ Music/TakeTaker/$slugged/",
                         style = T.data.copy(color = C.faint, fontSize = 12.sp),
                     )
-                    if (mode != SaveMode.MULTI) {
-                        Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Label("video", Modifier.width(44.dp))
+                        Chip("off", !video) { video = false }
+                        Chip(if (hasFootage) "camera + mix" else "waveform", video) { video = true }
+                    }
+                    if (mode != SaveMode.MULTI || video) {
+                        Spacer(Modifier.height(10.dp))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Label("mix", Modifier.width(44.dp))
                             Chip("normalize", normalize) { normalize = true }
@@ -704,7 +757,7 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
                     Spacer(Modifier.height(18.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         GhostButton("back", { mode = null }, Modifier.height(56.dp))
-                        PrimaryButton("save", { vm.save(mode!!, name, normalize) }, Modifier.weight(1f), enabled = name.isNotBlank())
+                        PrimaryButton("save", { vm.save(mode!!, name, normalize, video) }, Modifier.weight(1f), enabled = name.isNotBlank())
                     }
                 }
             }
@@ -748,6 +801,27 @@ private fun ColumnScope.Progress(f: Float) {
     Spacer(Modifier.height(16.dp))
 }
 
+/** One saved output: kind + file name on the left, its actions on the right. */
+@Composable
+private fun ResultRow(kind: String, name: String, actions: @Composable () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(16.dp)).background(C.raised)
+            .padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Label(kind)
+            Text(name, style = T.data.copy(fontSize = 12.sp, color = C.dim), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.width(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) { actions() }
+    }
+}
+
+@Composable
+private fun SmallAction(text: String, enabled: Boolean = true, onClick: () -> Unit) =
+    GhostButton(text, onClick, height = 44.dp, enabled = enabled)
+
 @Composable
 private fun ColumnScope.Done(vm: AppModel, d: ExportState.Done, onClose: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -758,12 +832,24 @@ private fun ColumnScope.Done(vm: AppModel, d: ExportState.Done, onClose: () -> U
     Spacer(Modifier.height(8.dp))
     Text(d.result.where, style = T.data.copy(color = C.dim))
     Spacer(Modifier.height(18.dp))
-    Label("share")
-    Spacer(Modifier.height(8.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (d.result.mix != null) GhostButton("mixdown", vm::shareMix, Modifier.weight(1f))
-        if (d.result.files.size > 1) {
-            GhostButton(if (d.zipping) "zipping…" else "zip of all", vm::shareZip, Modifier.weight(1f), enabled = !d.zipping)
+    d.result.mix?.let { mix ->
+        ResultRow("mixdown", mix.name) {
+            RoundButton(44.dp, vm::togglePreview, border = if (vm.previewing) C.text else C.line2) {
+                Glyph(if (vm.previewing) G.STOP else G.PLAY, C.text, 16.dp)
+            }
+            SmallAction("open") { vm.openMix() }
+            SmallAction("share") { vm.shareMix() }
+        }
+    }
+    d.result.video?.let { v ->
+        ResultRow("video", v.name) {
+            SmallAction("open") { vm.openVideo() }
+            SmallAction("share") { vm.shareVideo() }
+        }
+    }
+    if (d.result.files.size > 1) {
+        ResultRow("bundle", "zip of all ${d.result.files.size} files") {
+            SmallAction(if (d.zipping) "zipping…" else "share", enabled = !d.zipping) { vm.shareZip() }
         }
     }
     Spacer(Modifier.height(10.dp))

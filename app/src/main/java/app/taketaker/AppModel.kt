@@ -21,6 +21,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import app.taketaker.audio.Engine
+import app.taketaker.audio.VideoOpt
+import app.taketaker.video.CameraRig
+import app.taketaker.video.Facing
 import app.taketaker.audio.MicMode
 import app.taketaker.audio.Exporter
 import app.taketaker.audio.Player
@@ -90,6 +93,15 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     var message by mutableStateOf<String?>(null)
     var export by mutableStateOf<ExportState?>(null); private set
     var exportFraction by mutableFloatStateOf(0f); private set
+
+    /** Video recorded alongside takes; null = no camera. */
+    var facing by mutableStateOf<Facing?>(null); private set
+    val camera = CameraRig(app)
+
+    fun pickCamera(f: Facing?) {
+        facing = f
+        if (f == null) camera.unbind()
+    }
 
     val liveView = ViewWindow()
     val trimView = ViewWindow()
@@ -333,7 +345,17 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         val e = engine ?: return
         stopPlay()
         discardTake()
-        take = e.startTake()
+        val t = e.startTake()
+        take = t
+        export = null // a previous save result belongs to the previous take
+        if (facing != null && camera.bound != null) {
+            t.videoPending = true
+            camera.start(
+                File(t.dir, "video.mp4"),
+                onStarted = { ns -> t.videoOffsetUs = (ns - t.startNanos) / 1000 },
+                onFinished = { f -> t.video = f; t.videoPending = false },
+            )
+        }
         saved = false
         inF = 0; outF = 0; cursor = 0
         liveView.follow = true
@@ -342,6 +364,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopRec() {
+        camera.stop()
         val t = engine?.stopTake()
         transport = Transport.IDLE
         setService(false)
@@ -351,6 +374,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     /** While recording: throw away and start over. Otherwise: clear the take. */
     fun restart() {
         if (transport == Transport.REC) {
+            camera.stop()
             engine?.stopTake()?.delete()
             take = null
             transport = Transport.IDLE
@@ -362,6 +386,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun discardTake() {
+        camera.stop()
+        export = null
         take?.delete()
         take = null
         saved = false
@@ -431,7 +457,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         return "${app.taketaker.audio.slug(session)}_$ts"
     }
 
-    fun save(mode: SaveMode, name: String, normalize: Boolean) {
+    fun save(mode: SaveMode, name: String, normalize: Boolean, video: Boolean) {
         val t = take ?: return
         stopPlay()
         val snapshot = tracks
@@ -441,7 +467,11 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         exportFraction = 0f
         Thread({
             try {
-                val result = Exporter(getApplication()).export(t, snapshot, a, b, mode, fileName, bits, normalize) { f ->
+                // footage finalizes asynchronously after stop; give it a moment
+                var waited = 0
+                while (t.videoPending && waited < 5000) { Thread.sleep(50); waited += 50 }
+                val opt = if (video) VideoOpt(session.ifBlank { "take" }) else null
+                val result = Exporter(getApplication()).export(t, snapshot, a, b, mode, fileName, bits, normalize, opt) { f ->
                     main.post { exportFraction = f }
                 }
                 lastName = fileName
@@ -452,14 +482,49 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }, "export").start()
     }
 
-    fun closeExport() { export = null }
+    fun closeExport() {
+        stopPreview()
+        export = null
+    }
+
+    // ---- mixdown preview (plays the saved file, not the take) ------------
+
+    var previewing by mutableStateOf(false); private set
+    private var preview: android.media.MediaPlayer? = null
+
+    fun togglePreview() {
+        if (previewing) { stopPreview(); return }
+        val mix = (export as? ExportState.Done)?.result?.mix ?: return
+        stopPlay()
+        preview = android.media.MediaPlayer().apply {
+            setDataSource(getApplication(), mix.uri)
+            setOnCompletionListener { stopPreview() }
+            prepare()
+            start()
+        }
+        previewing = true
+    }
+
+    private fun stopPreview() {
+        preview?.runCatching { stop(); release() }
+        preview = null
+        previewing = false
+    }
+
+    fun shareMix() = (export as? ExportState.Done)?.result?.mix?.let { share(it.uri, it.mime) }
+    fun shareVideo() = (export as? ExportState.Done)?.result?.video?.let { share(it.uri, it.mime) }
 
     private var lastName = "take"
 
-    fun shareMix() {
-        val d = export as? ExportState.Done ?: return
-        val mix = d.result.mix ?: return
-        share(mix.uri, mix.mime)
+    /** Mixdown and video open in whatever the phone uses for audio / video. */
+    fun openVideo() = (export as? ExportState.Done)?.result?.video?.let { open(it.uri, it.mime) }
+    fun openMix() = (export as? ExportState.Done)?.result?.mix?.let { open(it.uri, it.mime) }
+
+    private fun open(uri: android.net.Uri, mime: String) {
+        val ctx = getApplication<Application>()
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { ctx.startActivity(view) } catch (_: android.content.ActivityNotFoundException) { message = "nothing installed to open $mime" }
     }
 
     /** Builds the zip only now, when asked, then hands it to the share sheet. */
@@ -503,6 +568,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         runCatching { getApplication<Application>().unregisterReceiver(usbReceiver) }
         player?.stop()
         engine?.release()
+        camera.unbind()
         setService(false)
     }
 }

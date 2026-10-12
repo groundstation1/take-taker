@@ -21,7 +21,10 @@ enum class SaveMode(val title: String, val blurb: String) {
 data class Saved(val uri: Uri, val name: String, val mime: String)
 
 /** What an export produced: a display location, every file, and the mix if there is one. */
-data class ExportResult(val where: String, val files: List<Saved>, val mix: Saved?)
+data class ExportResult(val where: String, val files: List<Saved>, val mix: Saved?, val video: Saved? = null)
+
+/** Ask for an MP4 too: camera footage if the take has some, otherwise a waveform video. */
+data class VideoOpt(val title: String)
 
 /** Renders a take to FLAC stems and/or an MP3 mix and publishes them under Music/TakeTaker. */
 class Exporter(private val ctx: Context) {
@@ -36,13 +39,15 @@ class Exporter(private val ctx: Context) {
     /** Returns a human-readable destination. Blocking; call off the main thread. */
     fun export(
         take: Take, tracks: List<Track>, from: Long, to: Long,
-        mode: SaveMode, baseName: String, bits: Int, normalize: Boolean, progress: (Float) -> Unit,
+        mode: SaveMode, baseName: String, bits: Int, normalize: Boolean, video: VideoOpt?,
+        progress: (Float) -> Unit,
     ): ExportResult {
         val tmp = File(ctx.cacheDir, "export").apply { deleteRecursively(); mkdirs() }
         val stems = mode != SaveMode.MIX
         val wantMix = mode != SaveMode.MULTI
         val total = (to - from).coerceAtLeast(1)
-        val passes = (if (stems || wantMix) 1 else 0) + (if (wantMix) 1 else 0)
+        val needMix = wantMix || video != null
+        val passes = 1 + (if (wantMix) 1 else 0) + (if (video != null) 1 else 0)
         val bufs = Array(take.channels) { FloatArray(CHUNK) }
         val mixBuf = FloatArray(CHUNK * 2)
         val used = tracks.flatMap { it.chans }.distinct()
@@ -59,7 +64,7 @@ class Exporter(private val ctx: Context) {
                 val n = min(CHUNK.toLong(), to - p).toInt()
                 for (c in used) reader.read(c, p, n, bufs[c])
                 writers.forEachIndexed { i, (_, w) -> w.write(Array(tracks[i].chans.size) { bufs[tracks[i].chans[it]] }, n) }
-                if (wantMix) {
+                if (needMix) {
                     Mix.mix(tracks, bufs, n, mixBuf)
                     for (i in 0 until n * 2) { val a = abs(mixBuf[i]); if (a > peak) peak = a }
                 }
@@ -70,25 +75,41 @@ class Exporter(private val ctx: Context) {
         writers.forEach { it.second.close() }
 
         // pass 2: mp3
+        val gain = when {
+            peak <= 0f -> 1f
+            normalize -> (MIX_CEILING / peak).coerceAtMost(MAX_BOOST)
+            peak > MIX_CEILING -> MIX_CEILING / peak // never clip
+            else -> 1f
+        }
         var mp3: File? = null
         if (wantMix) {
-            val gain = when {
-                peak <= 0f -> 1f
-                normalize -> (MIX_CEILING / peak).coerceAtMost(MAX_BOOST)
-                peak > MIX_CEILING -> MIX_CEILING / peak // never clip
-                else -> 1f
-            }
             mp3 = File(tmp, "${slug(baseName)}${if (stems) "_mix" else ""}.mp3")
-            encodeMp3(take, tracks, from, to, gain, mp3) { progress((passes - 1 + it) / passes) }
+            encodeMp3(take, tracks, from, to, gain, mp3) { progress((1 + it) / passes) }
+        }
+
+        // pass 3: video (camera footage or waveform), mixdown as AAC
+        var mp4: File? = null
+        if (video != null) {
+            mp4 = File(tmp, "${slug(baseName)}.mp4")
+            val footage = take.video?.let { app.taketaker.video.VideoExport.Footage(it, take.videoOffsetUs) }
+            app.taketaker.video.VideoExport(ctx).render(take, tracks, from, to, gain, video.title, footage, mp4) {
+                progress((passes - 1 + it) / passes)
+            }
         }
 
         // publish
         val folder = if (stems) "${Environment.DIRECTORY_MUSIC}/$ROOT/$baseName/" else "${Environment.DIRECTORY_MUSIC}/$ROOT/"
         val files = writers.map { (f, _) -> publish(f, f.name, "audio/flac", folder) }
         val mix = mp3?.let { publish(it, it.name, "audio/mpeg", folder) }
+        val vid = mp4?.let { publish(it, it.name, "video/mp4", "${Environment.DIRECTORY_MOVIES}/$ROOT/") }
         tmp.deleteRecursively()
         progress(1f)
-        return ExportResult(if (stems) folder else folder + mp3!!.name, files + listOfNotNull(mix), mix)
+        val where = when {
+            stems -> folder
+            mp3 != null -> folder + mp3.name
+            else -> "${Environment.DIRECTORY_MOVIES}/$ROOT/${mp4?.name}"
+        }
+        return ExportResult(where, files + listOfNotNull(mix, vid), mix, vid)
     }
 
     private fun encodeMp3(take: Take, tracks: List<Track>, from: Long, to: Long, gain: Float, file: File, progress: (Float) -> Unit) {
@@ -134,7 +155,8 @@ class Exporter(private val ctx: Context) {
             put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
-        val coll = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val coll = if (mime.startsWith("video/")) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        else MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val uri = resolver.insert(coll, values) ?: error("couldn't create $name")
         resolver.openOutputStream(uri)!!.use { out -> src.inputStream().use { it.copyTo(out, 1 shl 16) } }
         values.clear()
