@@ -18,8 +18,8 @@ save them as FLAC stems, a mixdown, and optionally a video.
   FM-1 outputs, which Android itself would downmix to stereo ([raw USB mode](#known-limitations)).
   Name tracks, pair channels into stereo, add the phone mic.
 - **Optional video or visualization**: film with the phone camera alongside the take, export a
-  rendered waveform video, or **overlay** the waveforms (plus session and track names) onto the
-  footage. Either way the soundtrack is the mixdown.
+  rendered waveform video, or **overlay** side-scrolling waveforms (right edge = now, plus session
+  and track names) onto the footage. Either way the soundtrack is the mixdown.
 - **Normalized mixdown**: stereo MP3 mix normalized to -1 dBFS (or left as is), next to lossless
   FLAC stems.
 - Auto-zooming live timeline, trim with in/out handles, preview / open / share after saving.

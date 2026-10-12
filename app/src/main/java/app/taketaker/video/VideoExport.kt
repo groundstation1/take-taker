@@ -420,21 +420,26 @@ class VideoExport(private val ctx: Context) {
             Color.rgb(224, 184, 142), Color.rgb(156, 196, 160), Color.rgb(143, 181, 222), Color.rgb(187, 165, 222),
             Color.rgb(222, 156, 156), Color.rgb(206, 201, 138), Color.rgb(142, 210, 203), Color.rgb(221, 169, 202),
         )
-        // overlay: waveforms only, in a band along the bottom sized from the frame itself
+        // overlay: a side-scrolling band that fills most of the frame below the title
+        private val u = min(w, h) / 1080f
         private val m = if (overlay) min(w, h) * 0.06f else 72f
-        private val band = if (overlay) (if (h > w) h * 0.26f else h * 0.36f) else 0f
-        private val top = if (overlay) h - m - band else 300f
+        private val top = if (overlay) m + 120f * u else 300f
         private val bottom = if (overlay) h - m else 970f
         private val waveR = if (overlay) w - m else w - m - 28f
         private val n = max(1, tracks.size)
         private val laneH = (bottom - top) / n
-        private val bright: Bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        private val dull: Bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        private val bright: Bitmap = Bitmap.createBitmap(if (overlay) 1 else w, if (overlay) 1 else h, Bitmap.Config.ARGB_8888)
+        private val dull: Bitmap = Bitmap.createBitmap(if (overlay) 1 else w, if (overlay) 1 else h, Bitmap.Config.ARGB_8888)
+        private val wave = Paint().apply { strokeWidth = 3f * u; strokeCap = Paint.Cap.BUTT }
         private val p = Paint(Paint.ANTI_ALIAS_FLAG)
         private val mm = FloatArray(2)
         private val total = (to - from).coerceAtLeast(1)
 
         init {
+            if (!overlay) prerender()
+        }
+
+        private fun prerender() {
             // waveforms are static: draw them once, bright and dimmed, and reveal by clipping
             val cb = Canvas(bright); val cd = Canvas(dull)
             val wp = Paint().apply { strokeWidth = 2f }
@@ -442,7 +447,7 @@ class VideoExport(private val ctx: Context) {
                 val lt = top + ti * laneH + if (overlay) 0f else 10f
                 val lh = laneH - if (overlay) 0f else 20f
                 val subH = lh / t.chans.size
-                val col = if (t.muted) faint else colors[t.color % colors.size]
+                val col = if (t.muted) faint else trackColor(t.color)
                 t.chans.forEachIndexed { si, ch ->
                     val cy = lt + subH * (si + if (overlay) 0.5f else 0.62f)
                     val amp = subH * if (overlay) 0.42f else 0.34f
@@ -455,12 +460,26 @@ class VideoExport(private val ctx: Context) {
                             val y1 = cy - shape(mm[1]) * amp
                             val y2 = max(cy - shape(mm[0]) * amp, y1 + 2f)
                             wp.color = col; cb.drawLine(x, y1, x, y2, wp)
-                            wp.color = (col and 0x00FFFFFF) or (0x48 shl 24); cd.drawLine(x, y1, x, y2, wp)
+                            wp.color = (col and 0x00FFFFFF) or ((if (overlay) 0x9A else 0x48) shl 24); cd.drawLine(x, y1, x, y2, wp)
                         }
                         x += 3f
                     }
                 }
             }
+        }
+
+        /**
+         * Track colour; over footage the soft UI palette disappears, so push saturation up and
+         * value to full there.
+         */
+        private fun trackColor(i: Int): Int {
+            val c = colors[i % colors.size]
+            if (!overlay) return c
+            val hsv = FloatArray(3)
+            Color.colorToHSV(c, hsv)
+            hsv[1] = (hsv[1] * 1.9f).coerceAtMost(0.85f)
+            hsv[2] = 1f
+            return Color.HSVToColor(hsv)
         }
 
         private fun shape(v: Float) = Math.signum(v) * abs(v).pow(0.8f)
@@ -471,17 +490,15 @@ class VideoExport(private val ctx: Context) {
             val px = m + ((sec / len) * (waveR - m)).toFloat()
             if (overlay) {
                 c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
-                c.drawBitmap(dull, 0f, 0f, null)
-                c.save(); c.clipRect(0f, 0f, px, h.toFloat()); c.drawBitmap(bright, 0f, 0f, null); c.restore()
+                drawScroll(c, at)
                 // session name top left, track names over their lanes; sizes follow the frame
-                val u = min(w, h) / 1080f
-                p.style = Paint.Style.FILL; p.color = text
+                p.style = Paint.Style.FILL; p.color = Color.WHITE
                 p.typeface = grotesk; p.textSize = 64f * u; p.letterSpacing = -0.02f
                 c.drawText(title, m, m + 52f * u, p)
-                p.typeface = mono; p.textSize = 22f * u; p.letterSpacing = 0.14f
+                p.typeface = mono; p.textSize = 24f * u; p.letterSpacing = 0.14f
                 tracks.forEachIndexed { ti, t ->
-                    p.color = if (t.muted) faint else dim
-                    c.drawText(t.name.uppercase(), m, top + ti * laneH + 22f * u, p)
+                    p.color = if (t.muted) faint else trackColor(t.color)
+                    c.drawText(t.name.uppercase(), m, top + ti * laneH + 26f * u, p)
                 }
                 return
             }
@@ -526,6 +543,38 @@ class VideoExport(private val ctx: Context) {
         }
 
         fun recycle() { bright.recycle(); dull.recycle() }
+
+        /** Seconds of history across the full width in overlay mode. */
+        private val window = 8.0
+
+        /** Side-scroller: right edge is [at], older audio further left, nothing ahead of now. */
+        private fun drawScroll(c: Canvas, at: Long) {
+            val rate = take.rate
+            val step = 4f * u
+            val perPx = window * rate / w // samples per pixel
+            tracks.forEachIndexed { ti, t ->
+                val lt = top + ti * laneH
+                val subH = laneH / t.chans.size
+                wave.color = if (t.muted) faint else trackColor(t.color)
+                t.chans.forEachIndexed { si, ch ->
+                    val cy = lt + subH * (si + 0.55f)
+                    val amp = subH * 0.42f
+                    val peaks = take.peaks[ch]
+                    var x = w.toFloat()
+                    while (x > 0f) {
+                        val s1 = at - ((w - x) * perPx).toLong()
+                        val s0 = s1 - (step * perPx).toLong().coerceAtLeast(1)
+                        if (s1 <= from) break
+                        if (peaks.minMax(max(s0, from), s1, mm)) {
+                            val y1 = cy - shape(mm[1]) * amp
+                            val y2 = max(cy - shape(mm[0]) * amp, y1 + 2f * u)
+                            c.drawLine(x - step / 2, y1, x - step / 2, y2, wave)
+                        }
+                        x -= step
+                    }
+                }
+            }
+        }
 
         private fun tc(s: Double): String {
             val m = (s / 60).toInt(); val ss = s % 60
