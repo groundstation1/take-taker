@@ -685,8 +685,7 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
     var mode by remember { mutableStateOf<SaveMode?>(null) }
     var name by remember { mutableStateOf(vm.defaultFileName()) }
     var normalize by remember { mutableStateOf(true) }
-    // null = no video, true = camera footage, false = waveform visualization
-    var video by remember { mutableStateOf<Boolean?>(null) }
+    var video by remember { mutableStateOf<app.taketaker.audio.VideoKind?>(null) }
     val hasFootage = vm.take?.let { it.video != null || it.videoPending } == true
     val export = vm.export
     val busy = export is ExportState.Running
@@ -742,11 +741,18 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
                         style = T.data.copy(color = C.faint, fontSize = 12.sp),
                     )
                     Spacer(Modifier.height(14.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Label("video", Modifier.width(44.dp))
-                        Chip("off", video == null) { video = null }
-                        if (hasFootage) Chip("camera", video == true) { video = true }
-                        Chip("waveform", video == false) { video = false }
+                    Row(verticalAlignment = Alignment.Top) {
+                        Label("video", Modifier.width(52.dp).padding(top = 9.dp))
+                        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Chip("off", video == null) { video = null }
+                            if (hasFootage) Chip("camera", video == app.taketaker.audio.VideoKind.CAMERA) { video = app.taketaker.audio.VideoKind.CAMERA }
+                            Chip("waveform", video == app.taketaker.audio.VideoKind.WAVEFORM) { video = app.taketaker.audio.VideoKind.WAVEFORM }
+                            if (hasFootage) Chip("overlay", video == app.taketaker.audio.VideoKind.OVERLAY) { video = app.taketaker.audio.VideoKind.OVERLAY }
+                        }
                     }
                     if (mode != SaveMode.MULTI || video != null) {
                         Spacer(Modifier.height(10.dp))
