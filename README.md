@@ -1,10 +1,30 @@
 # take taker
 
-A small Android multitrack recorder: plug in a class-compliant USB audio interface (built around the
-4× mono output of the FM-1 / melodee firmware), split its channels into named mono or stereo tracks,
-record, trim, and save as lossless stems and/or an MP3 mixdown.
+Android multitrack recorder for USB audio interfaces. Plug in an
+[FM-1 running the melodee firmware](#status), get its four outputs as four separate tracks, and
+save them as FLAC stems, a mixdown, and optionally a video.
 
-## What it does
+<p align="center"><img src="docs/live.webp" width="320" alt="Live view recording four FM-1 tracks with a camera preview"></p>
+
+## Status
+
+- **Alpha.** It works, it's young, expect rough edges.
+- **Tested with the melodee firmware only** (FM-1, over USB), on one phone (Galaxy S23 Ultra,
+  Android 16). Other class-compliant interfaces and phones should work but haven't been tried.
+- **Get it:** APK on the [releases page](https://github.com/groundstation1/take-taker/releases/latest).
+
+## Features
+
+- **Multitrack recording**: every channel of a USB interface as its own track, including all 4
+  FM-1 outputs, which Android itself would downmix to stereo ([raw USB mode](#known-limitations)).
+  Name tracks, pair channels into stereo, add the phone mic.
+- **Optional video or visualization**: film with the phone camera alongside the take, or export a
+  rendered waveform video instead. Either way the soundtrack is the mixdown.
+- **Normalized mixdown**: stereo MP3 mix normalized to -1 dBFS (or left as is), next to lossless
+  FLAC stems.
+- Auto-zooming live timeline, trim with in/out handles, preview / open / share after saving.
+
+## How it works
 
 - **01 source** — pick one or more inputs (USB interfaces, phone mics). Hot-plug aware.
 - **02 setup** — per-channel live meters, name channels, link neighbours into stereo tracks,
