@@ -686,6 +686,7 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
     var name by remember { mutableStateOf(vm.defaultFileName()) }
     var normalize by remember { mutableStateOf(true) }
     var video by remember { mutableStateOf<app.taketaker.audio.VideoKind?>(null) }
+    var turn by remember { mutableStateOf(0) }
     val hasFootage = vm.take?.let { it.video != null || it.videoPending } == true
     val export = vm.export
     val busy = export is ExportState.Running
@@ -754,6 +755,17 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
                             if (hasFootage) Chip("overlay", video == app.taketaker.audio.VideoKind.OVERLAY) { video = app.taketaker.audio.VideoKind.OVERLAY }
                         }
                     }
+                    if (video == app.taketaker.audio.VideoKind.CAMERA || video == app.taketaker.audio.VideoKind.OVERLAY) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Label("turn", Modifier.width(52.dp))
+                            Chip(if (turn == 0) "↻ auto" else "↻ +$turn°", turn != 0) { turn = (turn + 90) % 360 }
+                            Text(
+                                if (turn == 0) "follows how the phone was held" else "on top of auto",
+                                style = T.body.copy(fontSize = 12.sp, color = C.faint),
+                            )
+                        }
+                    }
                     if (mode != SaveMode.MULTI || video != null) {
                         Spacer(Modifier.height(10.dp))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -765,7 +777,7 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
                     Spacer(Modifier.height(18.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         GhostButton("back", { mode = null }, Modifier.height(56.dp))
-                        PrimaryButton("save", { vm.save(mode!!, name, normalize, video) }, Modifier.weight(1f), enabled = name.isNotBlank())
+                        PrimaryButton("save", { vm.save(mode!!, name, normalize, video, turn) }, Modifier.weight(1f), enabled = name.isNotBlank())
                     }
                 }
             }

@@ -98,8 +98,30 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     var facing by mutableStateOf<Facing?>(null); private set
     val camera = CameraRig(app)
 
+    /** Physical orientation, quantized; time held per orientation is summed while filming. */
+    @Volatile private var deviceDegrees = 0
+    private val heldMs = LongArray(4)
+    private var heldSince = 0L
+    private val orientation = object : android.view.OrientationEventListener(app) {
+        override fun onOrientationChanged(o: Int) {
+            if (o == ORIENTATION_UNKNOWN) return
+            val q = ((o + 45) / 90 % 4) * 90
+            if (q != deviceDegrees) {
+                accrueHeld()
+                deviceDegrees = q
+            }
+        }
+    }
+
+    private fun accrueHeld() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (heldSince > 0) heldMs[deviceDegrees / 90] += now - heldSince
+        heldSince = if (transport == Transport.REC) now else 0L
+    }
+
     fun pickCamera(f: Facing?) {
         facing = f
+        if (f != null) orientation.enable() else orientation.disable()
         if (f == null) camera.unbind()
     }
 
@@ -350,8 +372,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         export = null // a previous save result belongs to the previous take
         if (facing != null && camera.bound != null) {
             t.videoPending = true
+            orientation.enable()
+            heldMs.fill(0); heldSince = android.os.SystemClock.elapsedRealtime()
+            t.videoStartDegrees = deviceDegrees
+            t.videoFront = facing == Facing.FRONT
             camera.start(
                 File(t.dir, "video.mp4"),
+                deviceDegrees,
                 onStarted = { ns -> t.videoOffsetUs = (ns - t.startNanos) / 1000 },
                 onFinished = { f -> t.video = f; t.videoPending = false },
             )
@@ -364,6 +391,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopRec() {
+        take?.let { t ->
+            if (t.videoPending || t.video != null) {
+                accrueHeld()
+                t.videoDominantDegrees = heldMs.indices.maxBy { heldMs[it] } * 90
+            }
+        }
         camera.stop()
         val t = engine?.stopTake()
         transport = Transport.IDLE
@@ -458,7 +491,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** [video]: null = no MP4. */
-    fun save(mode: SaveMode, name: String, normalize: Boolean, video: app.taketaker.audio.VideoKind?) {
+    fun save(mode: SaveMode, name: String, normalize: Boolean, video: app.taketaker.audio.VideoKind?, turn: Int = 0) {
         val t = take ?: return
         stopPlay()
         val snapshot = tracks
@@ -471,7 +504,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 // footage finalizes asynchronously after stop; give it a moment
                 var waited = 0
                 while (t.videoPending && waited < 5000) { Thread.sleep(50); waited += 50 }
-                val opt = video?.let { VideoOpt(session.ifBlank { "take" }, it) }
+                val opt = video?.let { VideoOpt(session.ifBlank { "take" }, it, turn) }
                 val result = Exporter(getApplication()).export(t, snapshot, a, b, mode, fileName, bits, normalize, opt) { f ->
                     main.post { exportFraction = f }
                 }
@@ -570,6 +603,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         player?.stop()
         engine?.release()
         camera.unbind()
+        orientation.disable()
         setService(false)
     }
 }

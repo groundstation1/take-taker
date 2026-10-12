@@ -63,9 +63,10 @@ class CameraRig(private val ctx: Context) {
      * reported it was running, [onFinished] the file (or null on failure).
      */
     @SuppressLint("MissingPermission")
-    fun start(file: File, onStarted: (Long) -> Unit, onFinished: (File?) -> Unit) {
+    fun start(file: File, deviceDegrees: Int, onStarted: (Long) -> Unit, onFinished: (File?) -> Unit) {
         if (bound == null) return
         stop()
+        capture.targetRotation = surfaceRotation(deviceDegrees)
         recording = capture.output
             .prepareRecording(ctx, FileOutputOptions.Builder(file).build()) // no .withAudioEnabled(): audio is the engine's job
             .start(ContextCompat.getMainExecutor(ctx)) { e ->
@@ -79,5 +80,13 @@ class CameraRig(private val ctx: Context) {
     fun stop() {
         recording?.stop()
         recording = null
+    }
+
+    /** OrientationEventListener degrees (0/90/180/270, device turned clockwise) → Surface rotation. */
+    private fun surfaceRotation(deg: Int) = when (deg) {
+        90 -> android.view.Surface.ROTATION_270
+        180 -> android.view.Surface.ROTATION_180
+        270 -> android.view.Surface.ROTATION_90
+        else -> android.view.Surface.ROTATION_0
     }
 }

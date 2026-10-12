@@ -22,6 +22,20 @@ class Take(val dir: File, val channels: Int, val rate: Int) {
     @Volatile var videoPending = false
     /** When the video started, relative to the audio (positive = video started later). */
     @Volatile var videoOffsetUs = 0L
+    /** Device orientation (0/90/180/270) when the video started, and the one held longest during it. */
+    @Volatile var videoStartDegrees = 0
+    @Volatile var videoDominantDegrees = 0
+    @Volatile var videoFront = false
+
+    /**
+     * Degrees to add to the file's rotation flag so the video shows the way the phone was held
+     * most of the take (back camera turns with the device, the front camera against it).
+     */
+    val videoRotationFix: Int
+        get() {
+            val d = videoDominantDegrees - videoStartDegrees
+            return ((if (videoFront) -d else d) % 360 + 360) % 360
+        }
     val files = Array(channels) { File(dir, "ch$it.f32") }
     val peaks = Array(channels) { PeakStore() }
     private val outs = Array(channels) { BufferedOutputStream(FileOutputStream(files[it]), 1 shl 17) }

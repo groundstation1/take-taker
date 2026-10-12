@@ -41,7 +41,8 @@ class VideoExport(private val ctx: Context) {
     }
 
     /** Footage recorded next to the take; [offsetUs] = when video started, relative to the audio. */
-    data class Footage(val file: File, val offsetUs: Long)
+    /** [turnDegrees]: extra clockwise turn on top of the file's own rotation flag. */
+    data class Footage(val file: File, val offsetUs: Long, val turnDegrees: Int = 0)
 
     fun render(
         take: Take, tracks: List<Track>, from: Long, to: Long, gain: Float,
@@ -79,12 +80,13 @@ class VideoExport(private val ctx: Context) {
             val ex = extractor
             if (ex != null && overlay) {
                 renderOverlay(
-                    take, tracks, startF, to, title, ex, ex.getTrackFormat(videoTrack), footage!!.offsetUs,
+                    take, tracks, startF, to, title, ex, ex.getTrackFormat(videoTrack), footage!!.offsetUs, footage.turnDegrees,
                     muxer, audioFormat, tmp, samples,
                 ) { progress(0.35f + it * 0.65f) }
             } else if (ex != null) {
                 val vf = ex.getTrackFormat(videoTrack)
-                if (vf.containsKey("rotation-degrees")) muxer.setOrientationHint(vf.getInteger("rotation-degrees"))
+                val r0 = if (vf.containsKey("rotation-degrees")) vf.getInteger("rotation-degrees") else 0
+                muxer.setOrientationHint((r0 + footage!!.turnDegrees) % 360)
                 val vt = muxer.addTrack(vf)
                 val at = muxer.addTrack(audioFormat)
                 muxer.start()
@@ -221,11 +223,11 @@ class VideoExport(private val ctx: Context) {
 
     private fun renderOverlay(
         take: Take, tracks: List<Track>, from: Long, to: Long, title: String,
-        ex: MediaExtractor, inFormat: MediaFormat, offsetUs: Long,
+        ex: MediaExtractor, inFormat: MediaFormat, offsetUs: Long, turnDegrees: Int,
         muxer: MediaMuxer, audioFormat: MediaFormat, tmp: File, samples: List<LongArray>,
         progress: (Float) -> Unit,
     ) {
-        val rotation = if (inFormat.containsKey("rotation-degrees")) inFormat.getInteger("rotation-degrees") else 0
+        val rotation = ((if (inFormat.containsKey("rotation-degrees")) inFormat.getInteger("rotation-degrees") else 0) + turnDegrees) % 360
         val sw = inFormat.getInteger(MediaFormat.KEY_WIDTH)
         val sh = inFormat.getInteger(MediaFormat.KEY_HEIGHT)
         // output at the footage's own resolution, turned the way it's meant to be seen; nothing scaled
@@ -430,7 +432,7 @@ class VideoExport(private val ctx: Context) {
         private val laneH = (bottom - top) / n
         private val bright: Bitmap = Bitmap.createBitmap(if (overlay) 1 else w, if (overlay) 1 else h, Bitmap.Config.ARGB_8888)
         private val dull: Bitmap = Bitmap.createBitmap(if (overlay) 1 else w, if (overlay) 1 else h, Bitmap.Config.ARGB_8888)
-        private val wave = Paint().apply { strokeWidth = 3f * u; strokeCap = Paint.Cap.BUTT }
+        private val wave = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val p = Paint(Paint.ANTI_ALIAS_FLAG)
         private val mm = FloatArray(2)
         private val total = (to - from).coerceAtLeast(1)
@@ -550,8 +552,15 @@ class VideoExport(private val ctx: Context) {
         /** Side-scroller: right edge is [at], older audio further left, nothing ahead of now. */
         private fun drawScroll(c: Canvas, at: Long) {
             val rate = take.rate
-            val step = 4f * u
             val perPx = window * rate / w // samples per pixel
+            // sampling grid pinned to absolute time (not to the moving right edge): every slice of
+            // audio gets the same min/max in every frame, so the waveform slides without shimmer
+            val colPx = 2f * u
+            val cs = (colPx * perPx).toLong().coerceAtLeast(1) // samples per column
+            val kEnd = at / cs
+            val cols = (w / colPx).toInt() + 3
+            val xs = FloatArray(cols); val hi = FloatArray(cols); val lo = FloatArray(cols)
+            val path = android.graphics.Path()
             tracks.forEachIndexed { ti, t ->
                 val lt = top + ti * laneH
                 val subH = laneH / t.chans.size
@@ -560,18 +569,29 @@ class VideoExport(private val ctx: Context) {
                     val cy = lt + subH * (si + 0.55f)
                     val amp = subH * 0.42f
                     val peaks = take.peaks[ch]
-                    var x = w.toFloat()
-                    while (x > 0f) {
-                        val s1 = at - ((w - x) * perPx).toLong()
-                        val s0 = s1 - (step * perPx).toLong().coerceAtLeast(1)
+                    var n = 0
+                    var k = kEnd
+                    while (n < cols) {
+                        val s0 = k * cs
+                        val s1 = min(s0 + cs, at) // the newest column is only partly heard
                         if (s1 <= from) break
-                        if (peaks.minMax(max(s0, from), s1, mm)) {
-                            val y1 = cy - shape(mm[1]) * amp
-                            val y2 = max(cy - shape(mm[0]) * amp, y1 + 2f * u)
-                            c.drawLine(x - step / 2, y1, x - step / 2, y2, wave)
-                        }
-                        x -= step
+                        val x = w - ((at - (s0 + s1) / 2).toFloat() / perPx.toFloat())
+                        if (x < -colPx) break
+                        var top = 0f; var bot = 0f
+                        if (peaks.minMax(max(s0, from), s1, mm)) { top = shape(mm[1]); bot = shape(mm[0]) }
+                        xs[n] = x
+                        hi[n] = cy - max(top, 0f) * amp - 0.75f * u
+                        lo[n] = cy - min(bot, 0f) * amp + 0.75f * u
+                        n++; k--
                     }
+                    if (n < 2) return@forEachIndexed
+                    // one antialiased filled envelope: top edge newest→oldest, bottom edge back
+                    path.rewind()
+                    path.moveTo(xs[0], hi[0])
+                    for (q in 1 until n) path.lineTo(xs[q], hi[q])
+                    for (q in n - 1 downTo 0) path.lineTo(xs[q], lo[q])
+                    path.close()
+                    c.drawPath(path, wave)
                 }
             }
         }
