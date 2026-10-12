@@ -152,9 +152,13 @@ fun DrawScope.drawGlyph(g: G, color: Color) {
         }, color)
         G.STOP -> drawRoundRect(color, Offset(w * 0.22f, w * 0.22f), Size(w * 0.56f, w * 0.56f), CornerRadius(w * 0.06f))
         G.RESTART -> {
-            drawArc(color, -60f, 300f, false, Offset(w * 0.2f, w * 0.2f), Size(w * 0.6f, w * 0.6f), style = s)
+            // ↺: arc runs counter-clockwise and ends at 12 o'clock, arrowhead points along it (left)
+            val r = w * 0.3f
+            val c = w * 0.5f
+            drawArc(color, 180f, -270f, false, Offset(c - r, c - r), Size(r * 2, r * 2), style = s)
+            val tipX = c - w * 0.05f; val y = c - r
             drawPath(Path().apply {
-                moveTo(w * 0.62f, w * 0.1f); lineTo(w * 0.8f, w * 0.26f); lineTo(w * 0.56f, w * 0.34f)
+                moveTo(tipX + w * 0.13f, y - w * 0.12f); lineTo(tipX, y); lineTo(tipX + w * 0.13f, y + w * 0.12f)
             }, color, style = s)
         }
         G.CHECK -> drawPath(Path().apply {

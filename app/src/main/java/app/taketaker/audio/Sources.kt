@@ -50,7 +50,7 @@ data class Source(
 enum class MicMode(val label: String, val blurb: String, val channels: Int, val presets: List<Int>) {
     STEREO("stereo", "dual mic · general", 2, listOf(MediaRecorder.AudioSource.CAMCORDER)),
     VOICE("voice", "speech · noise suppressed", 1, listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION)),
-    CLEAN("clean", "mono · no processing", 1, listOf(MediaRecorder.AudioSource.UNPROCESSED, MediaRecorder.AudioSource.VOICE_RECOGNITION)),
+    RAW("raw", "mono · no processing", 1, listOf(MediaRecorder.AudioSource.UNPROCESSED, MediaRecorder.AudioSource.VOICE_RECOGNITION)),
 }
 
 object Sources {

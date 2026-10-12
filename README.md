@@ -38,7 +38,7 @@ record, trim, and save as lossless stems and/or an MP3 mixdown.
   built-in-mic input whichever capsule it asks for (selecting "bottom" and "back" separately
   recorded bit-identical audio), so what you choose instead is the recording preset:
   **stereo** (camcorder preset → real dual-mic input), **voice** (call preset: noise suppression,
-  echo cancelling, mono) or **clean** (unprocessed, mono).
+  echo cancelling, mono) or **raw** (unprocessed, mono).
 - Multiple sources record side by side with best-effort sync; independent device clocks will drift
   slowly over long takes.
 - Raw takes are buffered uncompressed in the app cache until saved (~700 KB/s for 4 ch @ 44.1 kHz).

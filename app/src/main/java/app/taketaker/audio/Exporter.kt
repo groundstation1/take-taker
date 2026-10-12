@@ -2,6 +2,7 @@ package app.taketaker.audio
 
 import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
@@ -16,10 +17,18 @@ enum class SaveMode(val title: String, val blurb: String) {
     MIX("mixdown only", "stereo mp3 · 256 kbps"),
 }
 
+/** One published file. */
+data class Saved(val uri: Uri, val name: String, val mime: String)
+
+/** What an export produced: a display location, every file, and the mix if there is one. */
+data class ExportResult(val where: String, val files: List<Saved>, val mix: Saved?)
+
 /** Renders a take to FLAC stems and/or an MP3 mix and publishes them under Music/TakeTaker. */
 class Exporter(private val ctx: Context) {
     companion object {
         const val ROOT = "TakeTaker"
+        /** Normalizing won't boost by more than this (+24 dB), so near-silence stays quiet. */
+        private const val MAX_BOOST = 16f
         private const val CHUNK = 8192
         private const val MIX_CEILING = 0.891f // -1 dBFS
     }
@@ -27,8 +36,8 @@ class Exporter(private val ctx: Context) {
     /** Returns a human-readable destination. Blocking; call off the main thread. */
     fun export(
         take: Take, tracks: List<Track>, from: Long, to: Long,
-        mode: SaveMode, baseName: String, bits: Int, progress: (Float) -> Unit,
-    ): String {
+        mode: SaveMode, baseName: String, bits: Int, normalize: Boolean, progress: (Float) -> Unit,
+    ): ExportResult {
         val tmp = File(ctx.cacheDir, "export").apply { deleteRecursively(); mkdirs() }
         val stems = mode != SaveMode.MIX
         val wantMix = mode != SaveMode.MULTI
@@ -63,18 +72,23 @@ class Exporter(private val ctx: Context) {
         // pass 2: mp3
         var mp3: File? = null
         if (wantMix) {
-            val gain = if (peak > MIX_CEILING) MIX_CEILING / peak else 1f
+            val gain = when {
+                peak <= 0f -> 1f
+                normalize -> (MIX_CEILING / peak).coerceAtMost(MAX_BOOST)
+                peak > MIX_CEILING -> MIX_CEILING / peak // never clip
+                else -> 1f
+            }
             mp3 = File(tmp, "${slug(baseName)}${if (stems) "_mix" else ""}.mp3")
             encodeMp3(take, tracks, from, to, gain, mp3) { progress((passes - 1 + it) / passes) }
         }
 
         // publish
         val folder = if (stems) "${Environment.DIRECTORY_MUSIC}/$ROOT/$baseName/" else "${Environment.DIRECTORY_MUSIC}/$ROOT/"
-        writers.forEach { (f, _) -> publish(f, f.name, "audio/flac", folder) }
-        mp3?.let { publish(it, it.name, "audio/mpeg", folder) }
+        val files = writers.map { (f, _) -> publish(f, f.name, "audio/flac", folder) }
+        val mix = mp3?.let { publish(it, it.name, "audio/mpeg", folder) }
         tmp.deleteRecursively()
         progress(1f)
-        return if (stems) folder else folder + mp3!!.name
+        return ExportResult(if (stems) folder else folder + mp3!!.name, files + listOfNotNull(mix), mix)
     }
 
     private fun encodeMp3(take: Take, tracks: List<Track>, from: Long, to: Long, gain: Float, file: File, progress: (Float) -> Unit) {
@@ -112,7 +126,7 @@ class Exporter(private val ctx: Context) {
         enc.close()
     }
 
-    private fun publish(src: File, name: String, mime: String, relPath: String) {
+    private fun publish(src: File, name: String, mime: String, relPath: String): Saved {
         val resolver = ctx.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -126,6 +140,24 @@ class Exporter(private val ctx: Context) {
         values.clear()
         values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
+        return Saved(uri, name, mime)
+    }
+
+    /** Zips published files into the share cache (on demand, so saving stays fast). */
+    fun zip(files: List<Saved>, name: String): File {
+        val dir = File(ctx.cacheDir, "share").apply { deleteRecursively(); mkdirs() }
+        val out = File(dir, "$name.zip")
+        java.util.zip.ZipOutputStream(out.outputStream().buffered()).use { z ->
+            for (f in files) {
+                // FLAC and MP3 are already compressed; storing is as small and much faster
+                val e = java.util.zip.ZipEntry("$name/${f.name}")
+                z.setLevel(java.util.zip.Deflater.NO_COMPRESSION)
+                z.putNextEntry(e)
+                ctx.contentResolver.openInputStream(f.uri)!!.use { it.copyTo(z, 1 shl 16) }
+                z.closeEntry()
+            }
+        }
+        return out
     }
 }
 

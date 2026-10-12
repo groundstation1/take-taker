@@ -58,7 +58,7 @@ class ViewWindow {
 
 sealed interface ExportState {
     data class Running(val progress: Float) : ExportState
-    data class Done(val where: String) : ExportState
+    data class Done(val result: app.taketaker.audio.ExportResult, val zipping: Boolean = false) : ExportState
     data class Failed(val why: String) : ExportState
 }
 
@@ -431,7 +431,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         return "${app.taketaker.audio.slug(session)}_$ts"
     }
 
-    fun save(mode: SaveMode, name: String) {
+    fun save(mode: SaveMode, name: String, normalize: Boolean) {
         val t = take ?: return
         stopPlay()
         val snapshot = tracks
@@ -441,10 +441,11 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         exportFraction = 0f
         Thread({
             try {
-                val where = Exporter(getApplication()).export(t, snapshot, a, b, mode, fileName, bits) { f ->
+                val result = Exporter(getApplication()).export(t, snapshot, a, b, mode, fileName, bits, normalize) { f ->
                     main.post { exportFraction = f }
                 }
-                main.post { export = ExportState.Done(where); saved = true }
+                lastName = fileName
+                main.post { export = ExportState.Done(result); saved = true }
             } catch (e: Throwable) {
                 main.post { export = ExportState.Failed(e.message ?: e.javaClass.simpleName) }
             }
@@ -452,6 +453,41 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun closeExport() { export = null }
+
+    private var lastName = "take"
+
+    fun shareMix() {
+        val d = export as? ExportState.Done ?: return
+        val mix = d.result.mix ?: return
+        share(mix.uri, mix.mime)
+    }
+
+    /** Builds the zip only now, when asked, then hands it to the share sheet. */
+    fun shareZip() {
+        val d = export as? ExportState.Done ?: return
+        if (d.zipping) return
+        export = d.copy(zipping = true)
+        val ctx = getApplication<Application>()
+        Thread({
+            try {
+                val zip = Exporter(ctx).zip(d.result.files, lastName)
+                val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", zip)
+                main.post { export = d; share(uri, "application/zip") }
+            } catch (e: Throwable) {
+                main.post { export = d; message = "zip failed: ${e.message}" }
+            }
+        }, "zip").start()
+    }
+
+    private fun share(uri: android.net.Uri, mime: String) {
+        val ctx = getApplication<Application>()
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = mime
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        ctx.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
 
     private fun setService(on: Boolean) {
         val ctx = getApplication<Application>()

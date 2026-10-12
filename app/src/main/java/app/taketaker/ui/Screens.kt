@@ -53,6 +53,17 @@ import app.taketaker.audio.MicMode
 import app.taketaker.audio.SaveMode
 import app.taketaker.audio.Source
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.input.pointer.pointerInput
 
 private val GUTTER = 20.dp
 
@@ -345,8 +356,6 @@ private fun ChannelRow(
 @Composable
 fun LiveScreen(vm: AppModel, tick: State<Long>) {
     var saving by remember { mutableStateOf(false) }
-    var armed by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(armed) { if (armed != null) { delay(2600); armed = null } }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth > maxHeight && maxWidth > 600.dp
@@ -361,14 +370,14 @@ fun LiveScreen(vm: AppModel, tick: State<Long>) {
                     Modifier.width(200.dp).fillMaxHeight().padding(vertical = 12.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
-                ) { TransportControls(vm, armed, { armed = it }, { saving = true }, vertical = true) }
+                ) { TransportControls(vm, { saving = true }, vertical = true) }
             }
         } else {
             Column(Modifier.fillMaxSize().padding(horizontal = GUTTER)) {
                 LiveHeader(vm, tick)
                 Timeline(vm, vm.liveView, false, tick, Modifier.weight(1f).fillMaxWidth())
                 Spacer(Modifier.height(12.dp))
-                TransportControls(vm, armed, { armed = it }, { saving = true }, vertical = false)
+                TransportControls(vm, { saving = true }, vertical = false)
                 Spacer(Modifier.height(12.dp))
             }
         }
@@ -436,41 +445,94 @@ private fun StateChip(vm: AppModel, tick: State<Long>) {
     }
 }
 
+/**
+ * Press-and-hold for destructive actions: a ring fills while held, [onHeld] fires when it
+ * completes. A short tap calls [onTap] instead (used to show a hint). With [onHeld] null the
+ * gesture is a plain tap.
+ */
 @Composable
-private fun TransportControls(
-    vm: AppModel, armed: String?, arm: (String?) -> Unit, onSave: () -> Unit, vertical: Boolean,
-) {
+private fun rememberHold(onTap: () -> Unit, onHeld: (() -> Unit)?, durationMs: Int = 650): Pair<Modifier, State<Float>> {
+    val progress = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val tap by rememberUpdatedState(onTap)
+    val held by rememberUpdatedState(onHeld)
+    val mod = Modifier.pointerInput(Unit) {
+        awaitEachGesture {
+            awaitFirstDown()
+            val h = held
+            if (h == null) {
+                if (waitForUpOrCancellation() != null) tap()
+                return@awaitEachGesture
+            }
+            val job = scope.launch {
+                progress.snapTo(0f)
+                progress.animateTo(1f, tween(durationMs, easing = LinearEasing))
+                h()
+                progress.snapTo(0f)
+            }
+            val up = waitForUpOrCancellation()
+            if (job.isActive) {
+                job.cancel()
+                scope.launch { progress.animateTo(0f, tween(160)) }
+                if (up != null) tap()
+            }
+        }
+    }
+    return mod to progress.asState()
+}
+
+private fun DrawScope.holdRing(p: Float) {
+    if (p <= 0f) return
+    val sw = 3.dp.toPx()
+    drawArc(
+        C.rec, -90f, 360f * p, false,
+        Offset(sw / 2, sw / 2), Size(size.width - sw, size.height - sw),
+        style = Stroke(sw, cap = StrokeCap.Round),
+    )
+}
+
+@Composable
+private fun TransportControls(vm: AppModel, onSave: () -> Unit, vertical: Boolean) {
     val haptic = LocalHapticFeedback.current
     val rec = vm.transport == Transport.REC
     val hasTake = vm.take != null
     val needsConfirm = hasTake && !vm.saved && !rec
+    var hintOverride by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(hintOverride) { if (hintOverride != null) { delay(2400); hintOverride = null } }
 
-    val onRec = {
-        if (needsConfirm && armed != "rec") arm("rec")
-        else { arm(null); haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.record() }
-    }
-    val onRestart = {
-        if (armed != "restart") arm("restart")
-        else { arm(null); haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.restart() }
-    }
-    val hint = when (armed) {
-        "rec" -> "tap ● again · discards unsaved take"
-        "restart" -> if (rec) "tap again · discard & restart" else "tap again · discard take"
-        else -> when {
-            rec -> "recording"
-            !hasTake -> "pinch to zoom · double-tap to follow"
-            vm.saved -> "saved · ● starts a new take"
-            else -> "tap timeline to place cursor"
-        }
+    val (recHold, recProgress) = rememberHold(
+        onTap = {
+            if (needsConfirm) hintOverride = "hold ● to discard the unsaved take"
+            else { haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.record() }
+        },
+        onHeld = if (needsConfirm) ({ haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.record() }) else null,
+    )
+    val (restartHold, restartProgress) = rememberHold(
+        onTap = { hintOverride = if (rec) "hold to discard & restart" else "hold to discard the take" },
+        onHeld = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.restart() },
+    )
+    val hint = hintOverride ?: when {
+        rec -> "recording"
+        !hasTake -> "pinch to zoom · double-tap to follow"
+        vm.saved -> "saved · ● starts a new take"
+        else -> "tap timeline to place cursor"
     }
 
     val restartBtn = @Composable {
-        RoundButton(
-            60.dp, onRestart, enabled = rec || hasTake,
-            border = if (armed == "restart") C.rec else C.line2,
-        ) { Glyph(G.RESTART, if (armed == "restart") C.rec else C.text, 22.dp) }
+        val enabled = rec || hasTake
+        Box(
+            Modifier.size(60.dp).clip(CircleShape).then(if (enabled) restartHold else Modifier)
+                .alpha(if (enabled) 1f else 0.35f),
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(Modifier.matchParentSize()) {
+                drawCircle(C.line2, size.width / 2 - 0.75.dp.toPx(), style = Stroke(1.5.dp.toPx()))
+                holdRing(restartProgress.value)
+            }
+            Glyph(G.RESTART, if (restartProgress.value > 0f) C.rec else C.text, 22.dp)
+        }
     }
-    val recBtn = @Composable { RecButton(rec, armed == "rec", onRec) }
+    val recBtn = @Composable { RecButton(rec, recProgress.value, recHold) }
     val playBtn = @Composable {
         RoundButton(60.dp, vm::togglePlay, enabled = hasTake && !rec) {
             Glyph(if (vm.transport == Transport.PLAY) G.STOP else G.PLAY, C.text, 22.dp)
@@ -482,6 +544,7 @@ private fun TransportControls(
     val saveBtn = @Composable { m: Modifier ->
         GhostButton("save", onSave, m, enabled = hasTake && !rec, color = if (hasTake && !vm.saved) C.text else C.dim)
     }
+    val hintColor = if (hintOverride != null) C.rec else C.faint
 
     if (vertical) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -489,7 +552,7 @@ private fun TransportControls(
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) { restartBtn(); playBtn() }
             trimBtn(Modifier.fillMaxWidth())
             saveBtn(Modifier.fillMaxWidth())
-            Label(hint, color = if (armed != null) C.rec else C.faint)
+            Label(hint, color = hintColor)
         }
     } else {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -499,7 +562,7 @@ private fun TransportControls(
                 verticalAlignment = Alignment.CenterVertically,
             ) { restartBtn(); recBtn(); playBtn() }
             Spacer(Modifier.height(10.dp))
-            Label(hint, color = if (armed != null) C.rec else C.faint)
+            Label(hint, color = hintColor)
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 trimBtn(Modifier.weight(1f))
@@ -510,15 +573,16 @@ private fun TransportControls(
 }
 
 @Composable
-private fun RecButton(recording: Boolean, armed: Boolean, onClick: () -> Unit) {
+private fun RecButton(recording: Boolean, hold: Float, gesture: Modifier) {
     val morph by animateFloatAsState(if (recording) 1f else 0f, tween(180), label = "rec")
     Box(
-        Modifier.size(84.dp).clip(CircleShape).clickable(onClick = onClick),
+        Modifier.size(84.dp).clip(CircleShape).then(gesture),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width
-            drawCircle(if (recording || armed) C.rec else C.line2, w / 2 - 1.dp.toPx(), style = Stroke(1.5.dp.toPx()))
+            drawCircle(if (recording) C.rec else C.line2, w / 2 - 1.dp.toPx(), style = Stroke(1.5.dp.toPx()))
+            holdRing(hold)
             // circle → rounded square
             val side = w * (0.62f - 0.24f * morph)
             val r = side / 2 * (1f - 0.7f * morph)
@@ -577,6 +641,7 @@ fun TrimScreen(vm: AppModel, tick: State<Long>) {
 private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
     var mode by remember { mutableStateOf<SaveMode?>(null) }
     var name by remember { mutableStateOf(vm.defaultFileName()) }
+    var normalize by remember { mutableStateOf(true) }
     val export = vm.export
     val busy = export is ExportState.Running
 
@@ -599,7 +664,7 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
             Spacer(Modifier.height(18.dp))
             when {
                 export is ExportState.Running -> Progress(vm.exportFraction)
-                export is ExportState.Done -> Done(export.where, onClose)
+                export is ExportState.Done -> Done(vm, export, onClose)
                 export is ExportState.Failed -> {
                     Label("failed", color = C.rec)
                     Spacer(Modifier.height(8.dp))
@@ -628,10 +693,18 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
                         if (mode == SaveMode.MIX) "→ Music/TakeTaker/$slugged.mp3" else "→ Music/TakeTaker/$slugged/",
                         style = T.data.copy(color = C.faint, fontSize = 12.sp),
                     )
+                    if (mode != SaveMode.MULTI) {
+                        Spacer(Modifier.height(14.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Label("mix", Modifier.width(44.dp))
+                            Chip("normalize", normalize) { normalize = true }
+                            Chip("as is", !normalize) { normalize = false }
+                        }
+                    }
                     Spacer(Modifier.height(18.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         GhostButton("back", { mode = null }, Modifier.height(56.dp))
-                        PrimaryButton("save", { vm.save(mode!!, name) }, Modifier.weight(1f), enabled = name.isNotBlank())
+                        PrimaryButton("save", { vm.save(mode!!, name, normalize) }, Modifier.weight(1f), enabled = name.isNotBlank())
                     }
                 }
             }
@@ -676,14 +749,23 @@ private fun ColumnScope.Progress(f: Float) {
 }
 
 @Composable
-private fun ColumnScope.Done(where: String, onClose: () -> Unit) {
+private fun ColumnScope.Done(vm: AppModel, d: ExportState.Done, onClose: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Glyph(G.CHECK, C.text, 26.dp)
         Spacer(Modifier.width(8.dp))
         Text("saved", style = T.title)
     }
     Spacer(Modifier.height(8.dp))
-    Text(where, style = T.data.copy(color = C.dim))
+    Text(d.result.where, style = T.data.copy(color = C.dim))
     Spacer(Modifier.height(18.dp))
+    Label("share")
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (d.result.mix != null) GhostButton("mixdown", vm::shareMix, Modifier.weight(1f))
+        if (d.result.files.size > 1) {
+            GhostButton(if (d.zipping) "zipping…" else "zip of all", vm::shareZip, Modifier.weight(1f), enabled = !d.zipping)
+        }
+    }
+    Spacer(Modifier.height(10.dp))
     PrimaryButton("done", onClose, Modifier.fillMaxWidth())
 }
