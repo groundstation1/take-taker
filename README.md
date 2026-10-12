@@ -4,11 +4,6 @@ A small Android multitrack recorder: plug in a class-compliant USB audio interfa
 4× mono output of the FM-1 / melodee firmware), split its channels into named mono or stereo tracks,
 record, trim, and save as lossless stems and/or an MP3 mixdown.
 
-> **⚠️ Disclaimer: this is vibecoded.** It was written in one sitting with an AI coding assistant
-> (Claude Code), tested on a single phone with a single device, and has had no real review.
-> It works on the happy path. Treat it as a toy / starting point, not as something to trust a
-> once-in-a-lifetime take to. No warranty, see LICENSE.
-
 ## What it does
 
 - **01 source** — pick one or more inputs (USB interfaces, phone mics). Hot-plug aware.
@@ -96,3 +91,14 @@ cpp/usbiso.c         isochronous IN streaming over usbfs
 ## License
 
 MIT for the app code. Bundled fonts remain under the OFL; jump3r under the LGPL.
+
+## 🤖 Agentically engineered
+
+**Built by a human and an AI agent, and proud of it.** The human set the direction, held the
+hardware and made the calls; [Claude Code](https://claude.com/claude-code) wrote the code. Along
+the way it read Samsung's audio HAL logs to find out why 4 channels became 2, wrote a userspace USB
+audio driver to get them back, and checked its own FLAC encoder bit-for-bit against ffmpeg.
+
+**Know what you're running:** it has been exercised on one phone (Galaxy S23 Ultra, Android 16) with
+one instrument (FM-1 / melodee firmware), and reviewed by its makers, not by an outside pair of
+eyes. Use it, fork it, file issues. No warranty — see LICENSE.
