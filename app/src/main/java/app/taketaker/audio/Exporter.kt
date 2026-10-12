@@ -23,8 +23,8 @@ data class Saved(val uri: Uri, val name: String, val mime: String)
 /** What an export produced: a display location, every file, and the mix if there is one. */
 data class ExportResult(val where: String, val files: List<Saved>, val mix: Saved?, val video: Saved? = null)
 
-/** Ask for an MP4 too: camera footage if the take has some, otherwise a waveform video. */
-data class VideoOpt(val title: String)
+/** Ask for an MP4 too: the take's camera footage ([camera]) or a rendered waveform video. */
+data class VideoOpt(val title: String, val camera: Boolean)
 
 /** Renders a take to FLAC stems and/or an MP3 mix and publishes them under Music/TakeTaker. */
 class Exporter(private val ctx: Context) {
@@ -91,7 +91,7 @@ class Exporter(private val ctx: Context) {
         var mp4: File? = null
         if (video != null) {
             mp4 = File(tmp, "${slug(baseName)}.mp4")
-            val footage = take.video?.let { app.taketaker.video.VideoExport.Footage(it, take.videoOffsetUs) }
+            val footage = take.video?.takeIf { video.camera }?.let { app.taketaker.video.VideoExport.Footage(it, take.videoOffsetUs) }
             app.taketaker.video.VideoExport(ctx).render(take, tracks, from, to, gain, video.title, footage, mp4) {
                 progress((passes - 1 + it) / passes)
             }

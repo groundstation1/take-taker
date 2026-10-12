@@ -457,7 +457,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         return "${app.taketaker.audio.slug(session)}_$ts"
     }
 
-    fun save(mode: SaveMode, name: String, normalize: Boolean, video: Boolean) {
+    /** [video]: null = no MP4, true = camera footage, false = waveform visualization. */
+    fun save(mode: SaveMode, name: String, normalize: Boolean, video: Boolean?) {
         val t = take ?: return
         stopPlay()
         val snapshot = tracks
@@ -470,7 +471,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 // footage finalizes asynchronously after stop; give it a moment
                 var waited = 0
                 while (t.videoPending && waited < 5000) { Thread.sleep(50); waited += 50 }
-                val opt = if (video) VideoOpt(session.ifBlank { "take" }) else null
+                val opt = video?.let { VideoOpt(session.ifBlank { "take" }, camera = it) }
                 val result = Exporter(getApplication()).export(t, snapshot, a, b, mode, fileName, bits, normalize, opt) { f ->
                     main.post { exportFraction = f }
                 }

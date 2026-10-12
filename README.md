@@ -17,8 +17,8 @@ save them as FLAC stems, a mixdown, and optionally a video.
 - **Multitrack recording**: every channel of a USB interface as its own track, including all 4
   FM-1 outputs, which Android itself would downmix to stereo ([raw USB mode](#known-limitations)).
   Name tracks, pair channels into stereo, add the phone mic.
-- **Optional video or visualization**: film with the phone camera alongside the take, or export a
-  rendered waveform video instead. Either way the soundtrack is the mixdown.
+- **Optional video or visualization**: film with the phone camera alongside the take and/or export a
+  rendered waveform video (available even when you filmed). Either way the soundtrack is the mixdown.
 - **Normalized mixdown**: stereo MP3 mix normalized to -1 dBFS (or left as is), next to lossless
   FLAC stems.
 - Auto-zooming live timeline, trim with in/out handles, preview / open / share after saving.
