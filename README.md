@@ -9,8 +9,7 @@ save them as FLAC stems, a mixdown, and optionally a video.
 ## Status
 
 - **Alpha.** It works, it's young, expect rough edges.
-- **Tested with the melodee firmware only** (FM-1, over USB), on one phone (Galaxy S23 Ultra,
-  Android 16). Other class-compliant interfaces and phones should work but haven't been tried.
+- **Tested with the melodee firmware only** (FM-1, over USB), on one phone. Other class-compliant interfaces and phones should work but haven't been tried.
 - **Get it:** APK on the [releases page](https://github.com/groundstation1/take-taker/releases/latest).
 
 ## Features
@@ -55,7 +54,7 @@ save them as FLAC stems, a mixdown, and optionally a video.
     FM-1, whose 24-bit format only pads 16-bit audio), which helps small synths near their
     CPU limit. A tucked-away "usb format" line at the bottom of setup lets you change it.
   - **system** — the normal Android audio path. Works with anything, but is subject to the vendor
-    audio policy: on a Galaxy S23 Ultra / Android 16 the HAL opens the FM-1 at 4 channels and then
+    audio policy: on the test phone the HAL opens the FM-1 at 4 channels and then
     downmixes to stereo for apps. The app detects this and says so.
 - The phone's built-in mics show up as one **Phone mic** source. Android gives an app a single
   built-in-mic input whichever capsule it asks for (selecting "bottom" and "back" separately
@@ -116,9 +115,9 @@ MIT for the app code. Bundled fonts remain under the OFL; jump3r under the LGPL.
 
 **Built by a human and an AI agent, and proud of it.** The human set the direction, held the
 hardware and made the calls; [Claude Code](https://claude.com/claude-code) wrote the code. Along
-the way it read Samsung's audio HAL logs to find out why 4 channels became 2, wrote a userspace USB
+the way it read the phone's audio HAL logs to find out why 4 channels became 2, wrote a userspace USB
 audio driver to get them back, and checked its own FLAC encoder bit-for-bit against ffmpeg.
 
-**Know what you're running:** it has been exercised on one phone (Galaxy S23 Ultra, Android 16) with
+**Know what you're running:** it has been exercised on one phone with
 one instrument (FM-1 / melodee firmware), and reviewed by its makers, not by an outside pair of
 eyes. Use it, fork it, file issues. No warranty — see LICENSE.
