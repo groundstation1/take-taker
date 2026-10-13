@@ -106,6 +106,47 @@ class VideoExport(private val ctx: Context) {
         progress(1f)
     }
 
+    // ---- still preview -----------------------------------------------------
+
+    /** One frame of what [kind] would export, from the middle of the trim. Blocking. */
+    fun still(
+        take: Take, tracks: List<Track>, from: Long, to: Long, title: String,
+        kind: app.taketaker.audio.VideoKind, footage: Footage?,
+    ): Bitmap? {
+        val at = from + (to - from) / 2
+        if (kind == app.taketaker.audio.VideoKind.WAVEFORM || footage == null) {
+            val b = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+            Viz(take, tracks, from, to, title).also { it.draw(Canvas(b), at); it.recycle() }
+            return b
+        }
+        val mmr = android.media.MediaMetadataRetriever()
+        val raw = try {
+            mmr.setDataSource(footage.file.path)
+            val tUs = (at * 1_000_000L / take.rate - footage.offsetUs).coerceAtLeast(0)
+            val rot = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            val f = mmr.getFrameAtTime(tUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: return null
+            // some retrievers hand back the stored (unrotated) frame: turn it upright ourselves then
+            val needs = if (rot % 180 != 0 && f.width > f.height) rot else if (rot == 180) 0 else 0
+            turned(f, (needs + footage.turnDegrees) % 360)
+        } finally { mmr.release() }
+        // keep it light: the sheet shows it small
+        val s = min(1f, 720f / max(raw.width, raw.height))
+        val frame = Bitmap.createScaledBitmap(raw, (raw.width * s).toInt(), (raw.height * s).toInt(), true)
+            .copy(Bitmap.Config.ARGB_8888, true)
+        if (kind == app.taketaker.audio.VideoKind.OVERLAY) {
+            val layer = Bitmap.createBitmap(frame.width, frame.height, Bitmap.Config.ARGB_8888)
+            Viz(take, tracks, from, to, title, frame.width, frame.height, overlay = true).also { it.draw(Canvas(layer), at); it.recycle() }
+            Canvas(frame).drawBitmap(layer, 0f, 0f, Paint().apply {
+                xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN)
+            })
+            layer.recycle()
+        }
+        return frame
+    }
+
+    private fun turned(b: Bitmap, deg: Int): Bitmap =
+        if (deg == 0) b else Bitmap.createBitmap(b, 0, 0, b.width, b.height, android.graphics.Matrix().apply { postRotate(deg.toFloat()) }, true)
+
     // ---- audio ------------------------------------------------------------
 
     private fun encodeAac(

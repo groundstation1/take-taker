@@ -22,7 +22,9 @@ save them as FLAC stems, a mixdown, and optionally a video.
   and track names) onto the footage. Either way the soundtrack is the mixdown.
 - **Normalized mixdown**: stereo MP3 mix normalized to -1 dBFS (or left as is), next to lossless
   FLAC stems.
-- Auto-zooming live timeline, trim with in/out handles, preview / open / share after saving.
+- **Listen**: optionally hear the live input mix through the phone's output while you play.
+- Auto-zooming live timeline, trim with in/out handles, still preview of the video before saving,
+  preview / open / share after saving.
 
 ## How it works
 

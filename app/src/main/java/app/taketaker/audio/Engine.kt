@@ -41,7 +41,21 @@ class Engine(
 
     fun start() = captures.forEach { it.start() }
 
+    // ---- monitoring: hear the inputs through the phone's output ----------
+
+    private val rings = captures.map { StereoRing(rate / 2) }
+    private var monitor: Monitor? = null
+    /** Tracks to monitor (mix as in the mixdown), or null for off. */
+    @Volatile var monitorTracks: List<Track>? = null; private set
+
+    fun setMonitor(tracks: List<Track>?) {
+        monitorTracks = tracks
+        if (tracks != null && monitor == null) monitor = Monitor(rate, rings).also { it.start() }
+        if (tracks == null) { monitor?.stop(); monitor = null }
+    }
+
     fun release() {
+        setMonitor(null)
         stopTake()?.delete()
         captures.forEach { it.running = false }
         captures.forEach { it.join(500) }
@@ -62,6 +76,9 @@ class Engine(
     }
 
     private inner class Capture(val src: Source, val offset: Int) : Thread("capture-${src.name}") {
+        private var monFor: List<Track>? = null
+        private var monLocal: List<Track> = emptyList()
+        private var monOut = FloatArray(0)
         val lock = Any()
         @Volatile var running = true
 
@@ -131,10 +148,25 @@ class Engine(
                 meters[g] = max(peak, meters[g] * 0.82f)
                 if (peak >= 0.999f) clips[g] = System.currentTimeMillis()
             }
+            monitorFeed(f, n, chBuf)
             val t = take ?: return
             synchronized(lock) {
                 if (take === t) for (c in 0 until n) t.append(offset + c, chBuf[c], f, scratch)
             }
+        }
+
+        /** Mixes the monitored tracks that live entirely on this input into its ring. */
+        private fun monitorFeed(f: Int, n: Int, chBuf: Array<FloatArray>) {
+            val mt = monitorTracks ?: return
+            if (mt !== monFor) {
+                monFor = mt
+                monLocal = mt.filter { t -> t.chans.all { it in offset until offset + n } }
+                    .map { t -> t.copy(chans = t.chans.map { it - offset }) }
+            }
+            if (monLocal.isEmpty()) return
+            if (monOut.size < f * 2) monOut = FloatArray(f * 2)
+            Mix.mix(monLocal, chBuf, f, monOut)
+            rings[captures.indexOf(this)].push(monOut, f)
         }
 
         /** Direct USB: claim the streaming interface and read iso packets ourselves. */

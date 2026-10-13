@@ -51,6 +51,7 @@ import app.taketaker.Row as SetupRow
 import app.taketaker.Transport
 import app.taketaker.audio.MicMode
 import app.taketaker.video.Facing
+import androidx.compose.ui.graphics.asImageBitmap
 import app.taketaker.audio.SaveMode
 import app.taketaker.audio.Source
 import kotlinx.coroutines.delay
@@ -203,29 +204,43 @@ private fun SourceCard(
 fun SetupScreen(vm: AppModel, tick: State<Long>) {
     Column(Modifier.fillMaxSize().padding(horizontal = GUTTER)) {
         StepStrip(1, onBack = vm::back)
-        Spacer(Modifier.height(20.dp))
-        Label("session")
-        Spacer(Modifier.height(4.dp))
-        InlineField(vm.session, { vm.session = it }, T.display, Modifier.fillMaxWidth(), placeholder = "name")
-        Spacer(Modifier.height(10.dp))
-        Hairline(Modifier.fillMaxWidth())
-        Spacer(Modifier.height(16.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Label("rate", Modifier.width(44.dp))
-            val rates = vm.rateOptions
-            // a choice only looks like one when there is something to choose
-            if (rates.size > 1) rates.forEach { r -> Chip(rateLabel(r), r == vm.rate) { vm.pickRate(r) } }
-            else Text("${rateLabel(vm.rate)}hz", style = T.data.copy(color = C.dim))
-            Spacer(Modifier.weight(1f))
-            Label("${vm.bits} bit flac", color = C.faint)
-        }
-        Spacer(Modifier.height(10.dp))
-        CameraRow(vm)
-        Spacer(Modifier.height(18.dp))
-
         val engine = vm.engine
         val rows = vm.rows
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // settings scroll with the channels: in landscape there is no room for both otherwise
+            item(key = "settings") {
+                Column {
+                Spacer(Modifier.height(20.dp))
+                Label("session")
+                Spacer(Modifier.height(4.dp))
+                InlineField(vm.session, { vm.session = it }, T.display, Modifier.fillMaxWidth(), placeholder = "name")
+                Spacer(Modifier.height(10.dp))
+                Hairline(Modifier.fillMaxWidth())
+                Spacer(Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Label("rate", Modifier.width(44.dp))
+                    val rates = vm.rateOptions
+                    // a choice only looks like one when there is something to choose
+                    if (rates.size > 1) rates.forEach { r -> Chip(rateLabel(r), r == vm.rate) { vm.pickRate(r) } }
+                    else Text("${rateLabel(vm.rate)}hz", style = T.data.copy(color = C.dim))
+                    Spacer(Modifier.weight(1f))
+                    Label("${vm.bits} bit flac", color = C.faint)
+                }
+                Spacer(Modifier.height(10.dp))
+                CameraRow(vm)
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Label("listen", Modifier.width(44.dp))
+                    Chip("off", !vm.monitor) { vm.pickMonitor(false) }
+                    Chip("on", vm.monitor) { vm.pickMonitor(true) }
+                    if (vm.monitor) Text(
+                        "through the phone's output · headphones with the mic",
+                        style = T.body.copy(fontSize = 12.sp, color = C.faint), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(18.dp))
+                }
+            }
             var i = 0
             var trackNo = 0
             while (i < rows.size) {
@@ -436,7 +451,7 @@ private fun LiveHeader(vm: AppModel, tick: State<Long>) {
         StateChip(vm, tick)
         if (vm.facing != null) {
             Spacer(Modifier.width(10.dp))
-            CameraPip(vm, vm.transport == Transport.REC, Modifier.width(54.dp).height(72.dp))
+            CameraPip(vm, vm.transport == Transport.REC, Modifier.width(84.dp).height(112.dp))
         }
     }
     Spacer(Modifier.height(4.dp))
@@ -687,6 +702,7 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
     var normalize by remember { mutableStateOf(true) }
     var video by remember { mutableStateOf<app.taketaker.audio.VideoKind?>(null) }
     var turn by remember { mutableStateOf(0) }
+    LaunchedEffect(video, turn) { vm.makeStill(video, turn) }
     val hasFootage = vm.take?.let { it.video != null || it.videoPending } == true
     val export = vm.export
     val busy = export is ExportState.Running
@@ -764,6 +780,19 @@ private fun SaveSheet(vm: AppModel, onClose: () -> Unit) {
                                 if (turn == 0) "follows how the phone was held" else "on top of auto",
                                 style = T.body.copy(fontSize = 12.sp, color = C.faint),
                             )
+                        }
+                    }
+                    val still = vm.videoStill
+                    if (video != null) {
+                        Spacer(Modifier.height(10.dp))
+                        Box(
+                            Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(12.dp)).background(C.bg),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (still != null) androidx.compose.foundation.Image(
+                                still.asImageBitmap(), "preview of the video",
+                                Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                            ) else Label("rendering preview", color = C.faint)
                         }
                     }
                     if (mode != SaveMode.MULTI || video != null) {

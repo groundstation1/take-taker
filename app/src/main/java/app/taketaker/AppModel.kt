@@ -305,6 +305,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         discardTake()
         engine?.release()
         engine = Engine(workDir, um, selectedSources, rate) { msg -> main.post { message = msg } }.also { it.start() }
+        applyMonitor()
     }
 
     fun rename(row: Row, name: String) = updateRow(row) { it.copy(name = name) }
@@ -313,6 +314,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     private fun updateRow(row: Row, f: (Row) -> Row) {
         rows = rows.map { if (it.global == row.global) f(it) else it }
+        applyMonitor()
     }
 
     /** Index of the row that a row is the right half of, or -1. */
@@ -341,6 +343,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         tracks = buildTracks().map { t -> t.copy(muted = old[t.chans]?.muted ?: false) }
         liveView.follow = true
         screen = Screen.LIVE
+        applyMonitor()
     }
 
     fun back() {
@@ -360,6 +363,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleMute(t: Track) {
         tracks = tracks.map { if (it.chans == t.chans) it.copy(muted = !it.muted) else it }
+        applyMonitor()
     }
 
     fun record() {
@@ -516,7 +520,47 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }, "export").start()
     }
 
+    // ---- monitor ------------------------------------------------------------
+
+    var monitor by mutableStateOf(false); private set
+
+    fun pickMonitor(on: Boolean) {
+        monitor = on
+        applyMonitor()
+    }
+
+    /** Monitors the current track layout (setup: as edited so far), honouring mutes. */
+    private fun applyMonitor() {
+        engine?.setMonitor(if (!monitor) null else if (screen == Screen.SETUP) buildTracks() else tracks)
+    }
+
+    // ---- still preview of the chosen video ----------------------------------
+
+    var videoStill by mutableStateOf<android.graphics.Bitmap?>(null); private set
+    private var stillJob = 0
+
+    fun makeStill(kind: app.taketaker.audio.VideoKind?, turn: Int) {
+        val t = take ?: return
+        val job = ++stillJob
+        if (kind == null) { videoStill = null; return }
+        val snapshot = tracks
+        val (a, b) = inF to outF
+        val title = session.ifBlank { "take" }
+        Thread({
+            // footage finalizes just after stop: wait a moment if needed
+            var waited = 0
+            while (t.videoPending && waited < 3000) { Thread.sleep(50); waited += 50 }
+            val footage = t.video?.let { app.taketaker.video.VideoExport.Footage(it, t.videoOffsetUs, (t.videoRotationFix + turn) % 360) }
+            val bmp = runCatching {
+                app.taketaker.video.VideoExport(getApplication()).still(t, snapshot, a, b, title, kind, footage)
+            }.getOrNull()
+            main.post { if (job == stillJob) videoStill = bmp }
+        }, "still").start()
+    }
+
     fun closeExport() {
+        stillJob++
+        videoStill = null
         stopPreview()
         export = null
     }
