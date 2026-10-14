@@ -249,7 +249,8 @@ fun SetupScreen(vm: AppModel, tick: State<Long>) {
                 if (r.ch == 0 && src != null) {
                     item(key = "h${r.sourceId}") {
                         Label(
-                            "${src.name} · ${if (src.raw) "usb raw" else src.kind.label} · ${src.channels} in",
+                            "${src.name} · ${if (src.raw) "usb raw" else src.kind.label} · ${src.channels} in" +
+                                if (src.raw && src.usb?.uac2 == true) " · class 2 · experimental" else "",
                             Modifier.padding(top = if (i == 0) 0.dp else 14.dp, bottom = 4.dp),
                         )
                     }
@@ -332,7 +333,8 @@ fun CameraPip(vm: AppModel, recording: Boolean, modifier: Modifier = Modifier) {
                 vm.camera.preview.setSurfaceProvider(surfaceProvider)
             }
         },
-        modifier = modifier.clip(shape).border(1.5.dp, if (recording) C.rec else C.line2, shape),
+        modifier = modifier.clip(shape).border(1.5.dp, if (recording) C.rec else C.line2, shape)
+            .clickable { vm.cameraFull = true },
     )
 }
 
@@ -435,6 +437,10 @@ fun LiveScreen(vm: AppModel, tick: State<Long>) {
                 Spacer(Modifier.height(12.dp))
             }
         }
+        if (vm.cameraFull && vm.facing != null) {
+            androidx.activity.compose.BackHandler { vm.cameraFull = false }
+            FullCamera(vm, tick) { FullRec(vm) }
+        }
         if (saving) SaveSheet(vm) { saving = false; vm.closeExport() }
     }
 }
@@ -451,7 +457,8 @@ private fun LiveHeader(vm: AppModel, tick: State<Long>) {
         StateChip(vm, tick)
         if (vm.facing != null) {
             Spacer(Modifier.width(10.dp))
-            CameraPip(vm, vm.transport == Transport.REC, Modifier.width(84.dp).height(112.dp))
+            if (!vm.cameraFull) CameraPip(vm, vm.transport == Transport.REC, Modifier.width(84.dp).height(112.dp))
+            else Spacer(Modifier.width(84.dp).height(112.dp))
         }
     }
     Spacer(Modifier.height(4.dp))
@@ -628,6 +635,21 @@ private fun TransportControls(vm: AppModel, onSave: () -> Unit, vertical: Boolea
             }
         }
     }
+}
+
+/** Record / stop for the full-screen camera, with the same hold-to-discard rule as the main transport. */
+@Composable
+private fun FullRec(vm: AppModel) {
+    val haptic = LocalHapticFeedback.current
+    val needsConfirm = vm.take != null && !vm.saved && vm.transport != Transport.REC
+    val (hold, progress) = rememberHold(
+        onTap = {
+            if (needsConfirm) vm.message = "hold ● to discard the unsaved take"
+            else { haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.record() }
+        },
+        onHeld = if (needsConfirm) ({ haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.record() }) else null,
+    )
+    RecButton(vm.transport == Transport.REC, progress.value, hold)
 }
 
 @Composable

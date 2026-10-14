@@ -97,6 +97,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     /** Video recorded alongside takes; null = no camera. */
     var facing by mutableStateOf<Facing?>(null); private set
     val camera = CameraRig(app)
+    /** Full-screen camera view on the take screen (framing). */
+    var cameraFull by mutableStateOf(false)
 
     /** Physical orientation, quantized; time held per orientation is summed while filming. */
     @Volatile private var deviceDegrees = 0
@@ -121,6 +123,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun pickCamera(f: Facing?) {
         facing = f
+        if (f == null) cameraFull = false
         if (f != null) orientation.enable() else orientation.disable()
         if (f == null) camera.unbind()
     }
@@ -265,9 +268,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             val spec = UsbRaw.probe(um, dev)
             if (spec.isEmpty()) {
                 rawPref = rawPref + (k to false)
-                message = "${s.name}: raw mode needs a usb audio class 1 device"
+                message = "${s.name}: no usable usb audio input for raw mode"
             } else {
                 specs = specs + (k to spec)
+                if (spec.any { it.uac2 }) message = "${s.name}: raw mode for usb audio class 2 is experimental (untested)"
             }
         }
         return true

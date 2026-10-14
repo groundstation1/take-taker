@@ -177,15 +177,23 @@ class Engine(
             val intf = (0 until dev.interfaceCount).map { dev.getInterface(it) }
                 .firstOrNull { it.id == spec.iface && it.alternateSetting == spec.alt }
                 ?: run { conn.close(); error("interface ${spec.iface}/${spec.alt} missing") }
+            // UAC2: the clock lives on the control interface, which must be ours to talk to it
+            val ac = if (spec.uac2) (0 until dev.interfaceCount).map { dev.getInterface(it) }
+                .firstOrNull { it.id == spec.acIface && it.alternateSetting == 0 } else null
             try {
                 if (!conn.claimInterface(intf, true)) error("couldn't claim usb interface")
+                if (ac != null) {
+                    if (!conn.claimInterface(ac, true)) error("couldn't claim usb control interface")
+                    if (!UsbRaw.setClock(conn, spec, rate)) onError("${src.name}: couldn't set ${rate} Hz, using the device's rate")
+                }
                 if (!conn.setInterface(intf)) error("couldn't select alt setting ${spec.alt}")
-                if (spec.rates.size > 1) { // UAC1 SET_CUR sampling frequency on the endpoint
+                if (!spec.uac2 && spec.rates.size > 1) { // UAC1 SET_CUR sampling frequency on the endpoint
                     val r = rate
                     val data = byteArrayOf(r.toByte(), (r shr 8).toByte(), (r shr 16).toByte())
                     conn.controlTransfer(0x22, 0x01, 0x0100, spec.ep, data, 3, 500)
                 }
-                val pkts = 8
+                // UAC2 devices are usually high speed: 8 microframes per ms, so more packets per transfer
+                val pkts = if (spec.uac2) 32 else 8
                 val h = UsbIso.open(conn.fileDescriptor, spec.ep, spec.maxPacket, pkts, 8)
                 if (h in -4095L..0L) error("usb stream failed (errno ${-h})") // real handles may look negative (tagged pointers)
                 try {
@@ -200,6 +208,10 @@ class Engine(
                     ?.let { runCatching { conn.setInterface(it) } }
                 conn.releaseInterface(intf)
                 UsbIso.reattach(conn.fileDescriptor, spec.iface)
+                if (ac != null) {
+                    conn.releaseInterface(ac)
+                    UsbIso.reattach(conn.fileDescriptor, spec.acIface)
+                }
                 conn.close()
             }
         }

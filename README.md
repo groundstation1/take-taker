@@ -42,6 +42,8 @@ save them as FLAC stems, a mixdown, and optionally a video.
   video (lanes, playhead, meters, timecode). Either way the soundtrack is the mixdown as AAC.
 - **video** — pick back/front camera in setup to film alongside a take. Video-only capture
   (CameraX); the audio path doesn't change and the two are aligned by start time at export.
+  Tap the camera thumbnail for a full-screen view to frame the shot, with the live mix scrolling
+  over it and a record button (experimental).
 - **after saving** — preview the mixdown in place, open or share mixdown / video, or share a zip
   of everything (built only when asked for).
 - Destructive actions (restart, recording over an unsaved take) are press-and-hold.
@@ -52,7 +54,9 @@ save them as FLAC stems, a mixdown, and optionally a video.
   - **raw** — the app claims the device's USB audio streaming interface and reads the isochronous
     stream itself (`src/main/cpp/usbiso.c`, usbfs, no root). Every channel, untouched. Needs a
     one-time USB permission; Android can't use the device while the app holds it. USB Audio
-    Class 1 only for now (UAC2 devices fall back to system).
+    Class 1 is tested (FM-1). **Class 2 support is experimental and untested on hardware**: it reads
+    the class-2 descriptors, asks the device clock for its rates and sets 48/44.1 kHz when offered,
+    and handles high-speed packet sizes, but nobody has run it against a real UAC2 device yet.
     Raw mode defaults to the device's lightest format at full channel count (16 bit on the
     FM-1, whose 24-bit format only pads 16-bit audio), which helps small synths near their
     CPU limit. A tucked-away "usb format" line at the bottom of setup lets you change it.
