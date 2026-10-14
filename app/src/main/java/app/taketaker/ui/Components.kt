@@ -133,7 +133,7 @@ fun RoundButton(size: Dp, onClick: () -> Unit, enabled: Boolean = true, border: 
 
 // ---- glyphs --------------------------------------------------------------
 
-enum class G { BACK, PLAY, STOP, RESTART, CHECK, LINK }
+enum class G { BACK, PLAY, STOP, RESTART, CHECK, LINK, EXPAND }
 
 @Composable
 fun Glyph(g: G, color: Color, size: Dp) {
@@ -164,6 +164,12 @@ fun DrawScope.drawGlyph(g: G, color: Color) {
         G.CHECK -> drawPath(Path().apply {
             moveTo(w * 0.2f, w * 0.52f); lineTo(w * 0.42f, w * 0.72f); lineTo(w * 0.8f, w * 0.3f)
         }, color, style = s)
+        G.EXPAND -> { // two corner brackets pointing outwards
+            drawPath(Path().apply {
+                moveTo(w * 0.55f, w * 0.15f); lineTo(w * 0.85f, w * 0.15f); lineTo(w * 0.85f, w * 0.45f)
+                moveTo(w * 0.45f, w * 0.85f); lineTo(w * 0.15f, w * 0.85f); lineTo(w * 0.15f, w * 0.55f)
+            }, color, style = s)
+        }
         G.LINK -> {
             drawRoundRect(color, Offset(w * 0.08f, w * 0.32f), Size(w * 0.5f, w * 0.36f), CornerRadius(w * 0.18f), style = s)
             drawRoundRect(color, Offset(w * 0.42f, w * 0.32f), Size(w * 0.5f, w * 0.36f), CornerRadius(w * 0.18f), style = s)

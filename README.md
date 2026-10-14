@@ -42,8 +42,10 @@ save them as FLAC stems, a mixdown, and optionally a video.
   video (lanes, playhead, meters, timecode). Either way the soundtrack is the mixdown as AAC.
 - **video** — pick back/front camera in setup to film alongside a take. Video-only capture
   (CameraX); the audio path doesn't change and the two are aligned by start time at export.
-  Tap the camera thumbnail for a full-screen view to frame the shot, with the live mix scrolling
-  over it and a record button (experimental).
+  Tap the camera thumbnail (it has an expand badge) for a full-screen view to frame the shot, with
+  the live mix scrolling over it and a record button. Once a take exists, the thumbnail, full-screen
+  view and a panel in trim show the recorded footage: playing along with playback, and jumping to
+  the cursor or the trim handle you're dragging.
 - **after saving** — preview the mixdown in place, open or share mixdown / video, or share a zip
   of everything (built only when asked for).
 - Destructive actions (restart, recording over an unsaved take) are press-and-hold.

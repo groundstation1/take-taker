@@ -46,16 +46,23 @@ import kotlin.math.sign
 @Composable
 fun FullCamera(vm: AppModel, tick: State<Long>, recButton: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize().background(Color.Black).clickable(indication = null, interactionSource = null) { }) {
-        AndroidView(
-            factory = { c ->
-                androidx.camera.view.PreviewView(c).apply {
-                    scaleType = androidx.camera.view.PreviewView.ScaleType.FIT_CENTER
-                    implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
-                    vm.camera.preview.setSurfaceProvider(surfaceProvider)
-                }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        val view = remember {
+            androidx.camera.view.PreviewView(ctx).apply {
+                scaleType = androidx.camera.view.PreviewView.ScaleType.FIT_CENTER
+                implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
+            }
+        }
+        // claim the camera feed only once this view is on screen and the thumbnail is gone;
+        // claiming it in the factory raced the thumbnail's teardown and left this view black
+        androidx.compose.runtime.LaunchedEffect(view) {
+            androidx.compose.runtime.withFrameNanos { }
+            androidx.compose.runtime.withFrameNanos { }
+            vm.camera.preview.setSurfaceProvider(view.surfaceProvider)
+        }
+        val footage = vm.showFootage()
+        if (footage != null) FootageView(vm, footage, Modifier.fillMaxSize()) // playback / scrub: what was filmed
+        else AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

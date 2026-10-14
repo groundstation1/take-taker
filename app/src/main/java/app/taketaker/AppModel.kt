@@ -450,6 +450,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         val playing = transport == Transport.PLAY
         if (playing) stopPlay()
         cursor = f
+        scrub = f
         if (playing) togglePlay()
     }
 
@@ -490,8 +491,11 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.TRIM
     }
 
-    fun setIn(f: Long) { inF = f.coerceIn(0, outF - 1) }
-    fun setOut(f: Long) { outF = f.coerceIn(inF + 1, take?.frames ?: f) }
+    /** Frame the footage should show when not playing: the cursor, or the trim handle last moved. */
+    var scrub by mutableLongStateOf(0L); private set
+
+    fun setIn(f: Long) { inF = f.coerceIn(0, outF - 1); scrub = inF }
+    fun setOut(f: Long) { outF = f.coerceIn(inF + 1, take?.frames ?: f); scrub = outF }
     fun resetTrim() { inF = 0; outF = take?.frames ?: 0 }
 
     // ---- save --------------------------------------------------------------

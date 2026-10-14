@@ -325,17 +325,26 @@ private fun CameraRow(vm: AppModel) {
 @Composable
 fun CameraPip(vm: AppModel, recording: Boolean, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(12.dp)
-    androidx.compose.ui.viewinterop.AndroidView(
-        factory = { c ->
-            androidx.camera.view.PreviewView(c).apply {
-                scaleType = androidx.camera.view.PreviewView.ScaleType.FILL_CENTER
-                implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
-                vm.camera.preview.setSurfaceProvider(surfaceProvider)
-            }
-        },
-        modifier = modifier.clip(shape).border(1.5.dp, if (recording) C.rec else C.line2, shape)
-            .clickable { vm.cameraFull = true },
-    )
+    Box(modifier.clip(shape).border(1.5.dp, if (recording) C.rec else C.line2, shape).clickable { vm.cameraFull = true }) {
+        val footage = vm.showFootage()
+        if (footage != null) FootageView(vm, footage, Modifier.fillMaxSize().background(C.bg))
+        else androidx.compose.ui.viewinterop.AndroidView(
+            factory = { c ->
+                androidx.camera.view.PreviewView(c).apply {
+                    scaleType = androidx.camera.view.PreviewView.ScaleType.FILL_CENTER
+                    implementationMode = androidx.camera.view.PreviewView.ImplementationMode.COMPATIBLE
+                    vm.camera.preview.setSurfaceProvider(surfaceProvider)
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+        // tells you the thumbnail opens full screen
+        Box(
+            Modifier.align(Alignment.BottomEnd).padding(5.dp).size(22.dp).clip(RoundedCornerShape(6.dp))
+                .background(C.bg.copy(alpha = 0.6f)),
+            contentAlignment = Alignment.Center,
+        ) { Glyph(G.EXPAND, C.text, 14.dp) }
+    }
 }
 
 @Composable
@@ -697,6 +706,13 @@ fun TrimScreen(vm: AppModel, tick: State<Long>) {
             Readout("in", tc(vm.inF / rate), Modifier.weight(1f))
             Readout("out", tc(vm.outF / rate), Modifier.weight(1f))
             Readout("length", tc((vm.outF - vm.inF) / rate), Modifier.weight(1f), color = C.dim)
+        }
+        vm.showFootage()?.let { footage ->
+            Spacer(Modifier.height(12.dp))
+            FootageView(
+                vm, footage,
+                Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(12.dp)).background(C.surface),
+            )
         }
         Spacer(Modifier.height(14.dp))
         Timeline(vm, vm.trimView, true, tick, Modifier.weight(1f).fillMaxWidth())
