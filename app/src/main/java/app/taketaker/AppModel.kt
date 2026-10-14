@@ -158,7 +158,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     val selectedSources get() = selected.mapNotNull { k -> sources.firstOrNull { it.key == k } }.map(::effective)
-    val rateOptions get() = (selectedSources.map { it.nativeRate }.ifEmpty { listOf(48000) }).distinct().sorted()
+    val rateOptions: List<Int> get() {
+        val chosen = selectedSources
+        if (chosen.isEmpty()) return listOf(48000)
+        return chosen.map { it.supportedRates.ifEmpty { listOf(it.nativeRate) }.toSet() }
+            .reduce { common, next -> common intersect next }.sorted()
+    }
     val bits get() = if (selectedSources.any { it.hiRes }) 24 else 16
     val trimmed get() = take != null && (inF > 0 || outF < (take?.frames ?: 0))
 
@@ -189,6 +194,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                     if (key != null) toSetup()
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED, UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    specs = emptyMap()
                     val before = selected.toSet()
                     rescan()
                     if (screen != Screen.SOURCES && before.any { k -> sources.none { it.key == k } }) {
@@ -230,7 +236,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun rescan() {
-        sources = Sources.scan(am, um)
+        val found = Sources.scan(am, um)
+        specs = specs.filterKeys { key -> found.any { it.key == key } }
+        sources = found
         if (screen == Screen.SOURCES) selected = selected.filter { k -> sources.any { it.key == k } }
         if (!autoPicked && selected.isEmpty()) {
             sources.firstOrNull { it.kind == Source.Kind.USB }?.let { selected = listOf(it.key); autoPicked = true }
@@ -262,10 +270,18 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 um.requestPermission(dev, pi)
                 return false
             }
-            val spec = UsbRaw.probe(um, dev)
+            val spec: List<RawSpec>
+            try {
+                spec = UsbRaw.probe(um, dev)
+            } catch (e: Exception) {
+                message = "${s.name}: ${e.message ?: "USB probe failed"}"
+                android.util.Log.w("TakeTaker", "raw probe failed: ${s.name}", e)
+                return false
+            }
             if (spec.isEmpty()) {
-                rawPref = rawPref + (k to false)
-                message = "${s.name}: raw mode needs a usb audio class 1 device"
+                message = "${s.name}: no supported USB PCM capture format"
+                android.util.Log.w("TakeTaker", message!!)
+                return false
             } else {
                 specs = specs + (k to spec)
             }
@@ -278,6 +294,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     fun toSetup() {
         if (!prepareRaw()) return
         if (selectedSources.isEmpty()) { message = "nothing to record from"; return }
+        if (rateOptions.isEmpty()) { message = "selected inputs have no common sample rate"; return }
         val old = rows.associateBy { it.sourceId to it.ch }
         var g = 0
         rows = selectedSources.flatMap { s ->
@@ -295,6 +312,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun pickRate(r: Int) {
+        if (r !in rateOptions) { message = "$r Hz is not supported by every selected input"; return }
         if (r == rate) return
         rate = r
         startEngine()
@@ -304,6 +322,10 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         stopPlay()
         discardTake()
         engine?.release()
+        selectedSources.forEach { s ->
+            android.util.Log.i("TakeTaker", "capture ${s.name}: ${if (s.raw) "raw" else "system"} " +
+                "${s.channels} channels at $rate Hz")
+        }
         engine = Engine(workDir, um, selectedSources, rate) { msg -> main.post { message = msg } }.also { it.start() }
     }
 

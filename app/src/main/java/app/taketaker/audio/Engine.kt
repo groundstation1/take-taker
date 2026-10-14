@@ -5,6 +5,7 @@ import android.hardware.usb.UsbManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Process
 import java.io.File
 import java.nio.ByteBuffer
@@ -43,8 +44,8 @@ class Engine(
 
     fun release() {
         stopTake()?.delete()
-        captures.forEach { it.running = false }
-        captures.forEach { it.join(500) }
+        captures.forEach { it.running = false; it.cancelRaw() }
+        captures.forEach { it.join() }
     }
 
     fun startTake(): Take {
@@ -64,6 +65,11 @@ class Engine(
     private inner class Capture(val src: Source, val offset: Int) : Thread("capture-${src.name}") {
         val lock = Any()
         @Volatile var running = true
+        private val handleLock = Any()
+        private var rawHandle = 0L
+        fun cancelRaw() = synchronized(handleLock) {
+            rawHandle.takeIf { it != 0L }?.let(UsbIso::cancel)
+        }
 
         override fun run() {
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
@@ -89,7 +95,11 @@ class Engine(
             val frames = rate / 50 // 20 ms
             val fbuf = FloatArray(frames * n)
             val sbuf = ShortArray(if (enc == AudioFormat.ENCODING_PCM_16BIT) frames * n else 0)
-            val bbuf = ByteArray(if (enc == AudioFormat.ENCODING_PCM_24BIT_PACKED) frames * n * 3 else 0)
+            val bbuf = ByteArray(when (enc) {
+                AudioFormat.ENCODING_PCM_24BIT_PACKED -> frames * n * 3
+                AudioFormat.ENCODING_PCM_32BIT -> frames * n * 4
+                else -> 0
+            })
             val chBuf = Array(n) { FloatArray(frames) }
             val scratch = ByteBuffer.allocate(frames * 4).order(ByteOrder.LITTLE_ENDIAN)
             while (running) {
@@ -104,6 +114,19 @@ class Engine(
                                     ((bbuf[3 * i + 1].toInt() and 0xFF) shl 8) or
                                     (bbuf[3 * i + 2].toInt() shl 16)
                                 fbuf[i] = v / 8388608f
+                            }
+                            k
+                        }
+                    }
+                    AudioFormat.ENCODING_PCM_32BIT -> {
+                        val got = rec.read(bbuf, 0, bbuf.size, AudioRecord.READ_BLOCKING)
+                        if (got < 0) got else {
+                            val k = got / 4
+                            for (i in 0 until k) {
+                                val p = i * 4
+                                val v = (bbuf[p].toInt() and 255) or ((bbuf[p + 1].toInt() and 255) shl 8) or
+                                    ((bbuf[p + 2].toInt() and 255) shl 16) or (bbuf[p + 3].toInt() shl 24)
+                                fbuf[i] = v / 2147483648f
                             }
                             k
                         }
@@ -141,33 +164,54 @@ class Engine(
         private fun rawRun(n: Int) {
             val spec = src.usb ?: error("no usb spec")
             val dev = spec.device ?: error("no usb device")
+            require(n == spec.channels) { "source has $n channels; USB format has ${spec.channels}" }
             val conn = usbManager.openDevice(dev) ?: error("no usb permission")
             val intf = (0 until dev.interfaceCount).map { dev.getInterface(it) }
                 .firstOrNull { it.id == spec.iface && it.alternateSetting == spec.alt }
                 ?: run { conn.close(); error("interface ${spec.iface}/${spec.alt} missing") }
             try {
-                if (!conn.claimInterface(intf, true)) error("couldn't claim usb interface")
-                if (!conn.setInterface(intf)) error("couldn't select alt setting ${spec.alt}")
-                if (spec.rates.size > 1) { // UAC1 SET_CUR sampling frequency on the endpoint
-                    val r = rate
-                    val data = byteArrayOf(r.toByte(), (r shr 8).toByte(), (r shr 16).toByte())
-                    conn.controlTransfer(0x22, 0x01, 0x0100, spec.ep, data, 3, 500)
-                }
-                val pkts = 8
-                val h = UsbIso.open(conn.fileDescriptor, spec.ep, spec.maxPacket, pkts, 8)
-                if (h in -4095L..0L) error("usb stream failed (errno ${-h})") // real handles may look negative (tagged pointers)
+                val control = if (spec.protocol == 2) (0 until dev.interfaceCount).map { dev.getInterface(it) }
+                    .firstOrNull { it.id == spec.controlIface && it.alternateSetting == 0 }
+                    ?: error("control interface ${spec.controlIface} missing") else null
+                var claimedControl = false
+                var claimedStream = false
                 try {
-                    rawLoop(h, spec, n, pkts)
+                    if (control != null) {
+                        if (!conn.claimInterface(control, true)) error("couldn't claim clock control interface")
+                        claimedControl = true
+                        Uac2Clock.configure(Uac2Clock.control(conn), spec, rate)
+                    }
+                    if (!conn.claimInterface(intf, true)) error("couldn't claim usb streaming interface")
+                    claimedStream = true
+                    if (!conn.setInterface(intf)) error("couldn't select alt setting ${spec.alt}")
+                    if (spec.protocol == 1 && (spec.rates.size > 1 || spec.rateRanges.isNotEmpty())) {
+                        val r = rate
+                        require(spec.supports(r)) { "USB endpoint does not support $r Hz" }
+                        val data = byteArrayOf(r.toByte(), (r shr 8).toByte(), (r shr 16).toByte())
+                        val got = conn.controlTransfer(0x22, 0x01, 0x0100, spec.ep, data, 3, 500)
+                        require(got == 3) { "USB endpoint rate request returned $got/3 bytes" }
+                    }
+                    android.util.Log.i("TakeTaker", "raw UAC${spec.protocol} ${dev.productName} " +
+                        "${spec.channels}ch/${spec.bits}bit ${rate}Hz clock=${spec.clockId} " +
+                        "interface=${spec.iface}/${spec.alt} endpoint=0x${spec.ep.toString(16)} interval=${spec.interval}")
+                    val pkts = 8
+                    val h = UsbIso.open(conn.fileDescriptor, spec.ep, spec.maxPacket, pkts, 8)
+                    if (h in -4095L..0L) error("usb stream failed (errno ${-h})") // real handles may look negative
+                    synchronized(handleLock) { rawHandle = h }
+                    try {
+                        rawLoop(h, spec, n, pkts)
+                    } finally {
+                        synchronized(handleLock) { rawHandle = 0L; UsbIso.close(h) }
+                    }
                 } finally {
-                    UsbIso.close(h)
+                    // Restore zero bandwidth before releasing the streaming interface.
+                    if (claimedStream) (0 until dev.interfaceCount).map { dev.getInterface(it) }
+                        .firstOrNull { it.id == spec.iface && it.alternateSetting == 0 }
+                        ?.let { runCatching { conn.setInterface(it) } }
+                    if (claimedStream) { conn.releaseInterface(intf); UsbIso.reattach(conn.fileDescriptor, spec.iface) }
+                    if (claimedControl) { conn.releaseInterface(control!!); UsbIso.reattach(conn.fileDescriptor, spec.controlIface) }
                 }
             } finally {
-                // back to the zero-bandwidth alt setting before letting go
-                (0 until dev.interfaceCount).map { dev.getInterface(it) }
-                    .firstOrNull { it.id == spec.iface && it.alternateSetting == 0 }
-                    ?.let { runCatching { conn.setInterface(it) } }
-                conn.releaseInterface(intf)
-                UsbIso.reattach(conn.fileDescriptor, spec.iface)
                 conn.close()
             }
         }
@@ -179,24 +223,32 @@ class Engine(
             val fbuf = FloatArray(maxFrames * spec.channels)
             val chBuf = Array(n) { FloatArray(maxFrames) }
             val scratch = ByteBuffer.allocate(maxFrames * 4).order(ByteOrder.LITTLE_ENDIAN)
-            val sub = spec.subframe
-            val scale = when (sub) { 2 -> 1f / 32768f; 3 -> 1f / 8388608f; else -> 1f / 2147483648f }
+            var emptyBatches = 0
+            var observedFrames = 0
+            val startupPeaks = FloatArray(n)
             while (running) {
-                val got = UsbIso.read(h, bytes)
-                if (got < 0) { onError("${src.name} went away"); break }
-                val f = got / frameBytes
-                if (f == 0) continue
-                val samples = f * spec.channels
-                var p = 0
-                for (k in 0 until samples) {
-                    val v = when (sub) {
-                        2 -> (bytes[p].toInt() and 0xFF) or (bytes[p + 1].toInt() shl 8)
-                        3 -> (bytes[p].toInt() and 0xFF) or ((bytes[p + 1].toInt() and 0xFF) shl 8) or (bytes[p + 2].toInt() shl 16)
-                        else -> (bytes[p].toInt() and 0xFF) or ((bytes[p + 1].toInt() and 0xFF) shl 8) or
-                            ((bytes[p + 2].toInt() and 0xFF) shl 16) or (bytes[p + 3].toInt() shl 24)
+                val got = UsbIso.read(h, bytes, frameBytes)
+                if (got < 0) {
+                    if (running) onError("${src.name}: USB packet error ${-got}")
+                    break
+                }
+                if (got == 0) {
+                    if (++emptyBatches == 500) {
+                        android.util.Log.w("TakeTaker", "${src.name}: 500 empty USB batches")
+                        emptyBatches = 0
                     }
-                    fbuf[k] = v * scale
-                    p += sub
+                    continue
+                }
+                emptyBatches = 0
+                val f = PcmDecoder.decode(bytes, got, spec.subframe, n, fbuf)
+                if (observedFrames < rate) {
+                    for (i in 0 until f * n) {
+                        val c = i % n
+                        startupPeaks[c] = max(startupPeaks[c], abs(fbuf[i]))
+                    }
+                    observedFrames += f
+                    if (observedFrames >= rate) android.util.Log.i("TakeTaker",
+                        "raw first second: $observedFrames frames, channel peaks=${startupPeaks.joinToString()}")
                 }
                 deliver(fbuf, f, n, chBuf, scratch)
             }
@@ -210,7 +262,10 @@ class Engine(
          */
         private fun openVerified(n: Int): AudioRecord? {
             val encodings = buildList {
-                if (src.hiRes) add(AudioFormat.ENCODING_PCM_24BIT_PACKED)
+                if (src.hiRes && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    add(AudioFormat.ENCODING_PCM_32BIT)
+                    add(AudioFormat.ENCODING_PCM_24BIT_PACKED)
+                }
                 add(AudioFormat.ENCODING_PCM_16BIT)
                 add(AudioFormat.ENCODING_PCM_FLOAT)
             }
@@ -250,7 +305,11 @@ class Engine(
                 if (n <= 2) setChannelMask(if (n == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO)
                 else setChannelIndexMask((1 shl n) - 1)
             }.build()
-            val bps = when (enc) { AudioFormat.ENCODING_PCM_FLOAT -> 4; AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3; else -> 2 }
+            val bps = when (enc) {
+                AudioFormat.ENCODING_PCM_FLOAT, AudioFormat.ENCODING_PCM_32BIT -> 4
+                AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
+                else -> 2
+            }
             val r = AudioRecord.Builder()
                 .setAudioSource(input)
                 .setAudioFormat(fmt)

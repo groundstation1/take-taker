@@ -24,6 +24,7 @@ data class Source(
     val usb: RawSpec? = null,
     val raw: Boolean = false,
     val mic: MicMode? = null,
+    val supportedRates: List<Int> = emptyList(),
 ) {
     enum class Kind(val label: String) { USB("usb"), MIC("mic"), JACK("jack"), LINE("line") }
 
@@ -40,6 +41,7 @@ data class Source(
     /** This source as captured raw, once its descriptors are known. */
     fun asRaw(spec: RawSpec) = copy(
         usb = spec, raw = true, channels = spec.channels, nativeRate = spec.rate, hiRes = spec.bits > 16,
+        supportedRates = spec.rateOptions(),
     )
 }
 
@@ -120,6 +122,7 @@ object Sources {
             nativeRate = nativeRate,
             hiRes = d.encodings.any { it in hiResEncodings },
             device = d,
+            supportedRates = rates,
         )
     }
 }
