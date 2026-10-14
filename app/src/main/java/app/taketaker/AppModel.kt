@@ -140,9 +140,12 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
         val wantRaw = s.canRaw && (rawPref[s.key] ?: true) || !s.canSystem
         if (!wantRaw) return s
-        // default to the lightest format at full channel count: class-1 USB devices are small
-        // gadgets, and their deeper formats often just pad 16-bit audio (the FM-1 does)
-        val spec = rawFormats(s.key).let { fs -> fs.firstOrNull { it.bits == rawBits[s.key] } ?: fs.lastOrNull() }
+        // default format at full channel count: class 1 → lightest (small full-speed gadgets whose
+        // deeper formats often just pad 16-bit audio, like the FM-1); class 2 → deepest (high-speed
+        // interfaces such as the EP-136 deliver real 24/32-bit and have the bandwidth for it)
+        val spec = rawFormats(s.key).let { fs ->
+            fs.firstOrNull { it.bits == rawBits[s.key] } ?: if (fs.firstOrNull()?.uac2 == true) fs.firstOrNull() else fs.lastOrNull()
+        }
         return if (spec != null) s.asRaw(spec) else s.copy(raw = true)
     }
 
